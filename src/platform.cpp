@@ -105,15 +105,18 @@ unsigned get_logical_core_count() {
         initialized = true;
     }
 
-    // Prefer maximum processor count to include parked cores (common on hybrid CPUs).
-    if (pGetMaximumProcessorCount) {
-        DWORD count = pGetMaximumProcessorCount(kAllGroups);
+    // IMPORTANT: prefer active processor count for real topology size.
+    // On multi-group systems (e.g. 2x Xeon with 80 logical CPUs),
+    // GetMaximumProcessorCount(ALL_GROUPS) can report the group capacity
+    // (64 + 64 = 128) instead of the actual active logical CPUs.
+    if (pGetActiveProcessorCount) {
+        DWORD count = pGetActiveProcessorCount(kAllGroups);
         if (count > 0) return static_cast<unsigned>(count);
     }
 
-    // Fallback to active count when maximum isn't available.
-    if (pGetActiveProcessorCount) {
-        DWORD count = pGetActiveProcessorCount(kAllGroups);
+    // Keep maximum count only as a legacy fallback when active API is absent.
+    if (!pGetActiveProcessorCount && pGetMaximumProcessorCount) {
+        DWORD count = pGetMaximumProcessorCount(kAllGroups);
         if (count > 0) return static_cast<unsigned>(count);
     }
 

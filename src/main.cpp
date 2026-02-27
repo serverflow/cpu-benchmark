@@ -98,6 +98,8 @@ void print_banner() {
     std::cout << R"(  ____) | |    | |_) |  __/ | | | (__| | | |)" << "\n";
     std::cout << R"( |_____/|_|    |____/ \___|_| |_|\___|_| |_|)" << "\n";
     std::cout << "Version: " << version::get_version_string() << "\n";
+    std::cout << "If you encounter any difficulties, please use the feedback form on the bench.serverflow.ru website.\n";
+    std::cout << "Your feedback will help us make the benchmark better and more convenient.\n";
     std::cout << "\n";
 }
 

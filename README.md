@@ -183,12 +183,14 @@ Z слоёв матриц NxN, классический i‑j‑k.
 
 ### Windows
 **Что установить:**
-1. **Visual Studio 2022 Community** (или Build Tools)  
+1. **Microsoft Visual C++ 2017–2026 Redistributable**  
+   https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version
+2. **Visual Studio 2022 Community** (или Build Tools)  
    В установщике выберите **“Разработка классических приложений на C++”** и убедитесь, что стоят:
    - MSVC (C++ Build Tools)
    - Windows 10/11 SDK
    - CMake Tools for Windows
-2. (Опционально) **Git**, если нужны тесты
+3. (Опционально) **Git**, если нужны тесты
 
 **Сборка (PowerShell):**
 ```powershell
