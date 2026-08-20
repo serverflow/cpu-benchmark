@@ -1,0 +1,130 @@
+workflows:
+  macos-arm64-release:
+    name: SFBench macOS ARM64 Release
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+
+    environment:
+      xcode: latest
+      vars:
+        SFBENCH_BUILD_DIR: build/codemagic-macos-arm64
+        SFBENCH_ARTIFACT_DIR: artifacts/codemagic-macos-arm64
+
+    scripts:
+      - name: Verify Apple Silicon build host
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+
+          if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+            echo "This workflow requires an Apple Silicon macOS runner." >&2
+            exit 1
+          fi
+
+          sw_vers
+          uname -a
+          xcrun clang++ --version
+
+      - name: Ensure CMake and Ninja are available
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+
+          if ! command -v cmake >/dev/null 2>&1; then
+            brew install cmake
+          fi
+          if ! command -v ninja >/dev/null 2>&1; then
+            brew install ninja
+          fi
+
+          cmake --version
+          ninja --version
+
+      - name: Configure native Release build
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+
+          cmake \
+            -S "$CM_BUILD_DIR" \
+            -B "$CM_BUILD_DIR/$SFBENCH_BUILD_DIR" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_CXX_FLAGS="-mcpu=native" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_PORTABLE=OFF \
+            -DENABLE_NATIVE_ARCH=ON \
+            -DENABLE_OPENMP=OFF
+
+      - name: Build SFBench
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+
+          JOBS="$(sysctl -n hw.logicalcpu)"
+          cmake --build "$CM_BUILD_DIR/$SFBENCH_BUILD_DIR" --parallel "$JOBS"
+
+      - name: Prepare and verify binary artifact
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+
+          VERSION="$(sed -n 's/.*VERSION_STRING = "\([^"]*\)";.*/\1/p' "$CM_BUILD_DIR/src/version.hpp")"
+          if [[ -z "$VERSION" ]]; then
+            echo "Could not read SFBench version from src/version.hpp." >&2
+            exit 1
+          fi
+
+          VERSION_SLUG="${VERSION// /-}"
+          ARTIFACT_ROOT="$CM_BUILD_DIR/$SFBENCH_ARTIFACT_DIR"
+          BINARY_NAME="SFBench-${VERSION_SLUG}-macos-arm64"
+          BINARY_PATH="$ARTIFACT_ROOT/$BINARY_NAME"
+
+          mkdir -p "$ARTIFACT_ROOT"
+          install -m 0755 "$CM_BUILD_DIR/$SFBENCH_BUILD_DIR/cpu_benchmark" "$BINARY_PATH"
+
+          # Ad-hoc signing requires no Apple account and makes the CLI binary
+          # directly executable on Apple Silicon.
+          codesign --force --sign - --timestamp=none "$BINARY_PATH"
+          codesign --verify --strict --verbose=2 "$BINARY_PATH"
+
+          ARCHS="$(lipo -archs "$BINARY_PATH")"
+          if [[ "$ARCHS" != "arm64" ]]; then
+            echo "Unexpected binary architecture: $ARCHS" >&2
+            exit 1
+          fi
+
+          VERSION_OUTPUT="$("$BINARY_PATH" --version)"
+          if [[ "$VERSION_OUTPUT" != *"SFBench $VERSION"* ]]; then
+            echo "Unexpected version output: $VERSION_OUTPUT" >&2
+            exit 1
+          fi
+
+          {
+            echo "$VERSION_OUTPUT"
+            echo "Architecture: $ARCHS"
+            echo "Build host: $(uname -m)"
+            echo "macOS: $(sw_vers -productVersion)"
+            echo "Compiler: $(xcrun clang++ --version | head -n 1)"
+            echo "CMake: $(cmake --version | head -n 1)"
+            echo
+            file "$BINARY_PATH"
+            echo
+            otool -L "$BINARY_PATH"
+          } | tee "$ARTIFACT_ROOT/build-info.txt"
+
+          (
+            cd "$ARTIFACT_ROOT"
+            shasum -a 256 "$BINARY_NAME" > SHA256SUMS.txt
+            zip -9 "${BINARY_NAME}.zip" "$BINARY_NAME" SHA256SUMS.txt build-info.txt
+          )
+
+    artifacts:
+      - artifacts/codemagic-macos-arm64/SFBench-*-macos-arm64
+      - artifacts/codemagic-macos-arm64/SFBench-*-macos-arm64.zip
+      - artifacts/codemagic-macos-arm64/SHA256SUMS.txt
+      - artifacts/codemagic-macos-arm64/build-info.txt

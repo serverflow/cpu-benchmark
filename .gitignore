@@ -3,3 +3,4 @@ build/
 .verify-*/
 .verify-*.obj
 .verify-*.tar.gz
+codemagic.yalm
