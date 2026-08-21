@@ -53,6 +53,12 @@ static AffinityResult set_thread_affinity_handle(HANDLE handle, unsigned core_id
     #include <sys/resource.h>
     #include <unistd.h>
     #include <errno.h>
+    #ifdef __ANDROID__
+        #include <sys/syscall.h>
+        static pid_t gettid_android() {
+            return static_cast<pid_t>(syscall(__NR_gettid));
+        }
+    #endif
 #elif defined(__APPLE__)
     #include <pthread.h>
     #include <mach/mach.h>
@@ -223,8 +229,19 @@ AffinityResult ThreadAffinityManager::pin_to_core(std::thread& thread, unsigned 
     CPU_SET(core_id, &cpuset);
     
     pthread_t native_handle = thread.native_handle();
-    int result = pthread_setaffinity_np(native_handle, sizeof(cpu_set_t), &cpuset);
-    
+#ifdef __ANDROID__
+    int result = sched_setaffinity(
+        gettid_android(),
+        sizeof(cpu_set_t),
+        &cpuset
+    );
+#else
+    int result = pthread_setaffinity_np(
+        pthread_self(),
+        sizeof(cpu_set_t),
+        &cpuset
+    );
+#endif
     if (result != 0) {
         if (result == EPERM) {
             return AffinityResult::PermissionDenied;
@@ -247,8 +264,19 @@ AffinityResult ThreadAffinityManager::pin_current_thread(unsigned core_id) {
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
     
-    int result = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-    
+#ifdef __ANDROID__
+    int result = sched_setaffinity(
+        gettid_android(),
+        sizeof(cpu_set_t),
+        &cpuset
+    );
+#else
+    int result = pthread_setaffinity_np(
+        pthread_self(),
+        sizeof(cpu_set_t),
+        &cpuset
+    );
+#endif
     if (result != 0) {
         if (result == EPERM) {
             return AffinityResult::PermissionDenied;
@@ -276,8 +304,19 @@ AffinityResult ThreadAffinityManager::pin_to_socket(unsigned socket_id) {
         CPU_SET(core, &cpuset);
     }
     
-    int result = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-    
+#ifdef __ANDROID__
+    int result = sched_setaffinity(
+        gettid_android(),
+        sizeof(cpu_set_t),
+        &cpuset
+    );
+#else
+    int result = pthread_setaffinity_np(
+        pthread_self(),
+        sizeof(cpu_set_t),
+        &cpuset
+    );
+#endif    
     if (result != 0) {
         if (result == EPERM) {
             return AffinityResult::PermissionDenied;
@@ -367,8 +406,11 @@ bool ThreadAffinityManager::is_priority_supported() {
 unsigned long long ThreadAffinityManager::get_current_affinity() {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    
+#ifdef __ANDROID__
+    if (sched_getaffinity(0, sizeof(cpu_set_t), &cpuset) == 0) {
+#else
     if (pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) == 0) {
+#endif
         unsigned long long mask = 0;
         unsigned core_count = get_core_count();
         for (unsigned i = 0; i < core_count && i < 64; ++i) {
