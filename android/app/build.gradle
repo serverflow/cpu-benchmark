@@ -1,0 +1,42 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'ru.serverflow.cpubenchmark'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "ru.serverflow.cpubenchmark"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // The native cpu_benchmark binary is not a real shared library, but Android
+    // only lets an app execve() its own files from the extracted native-library
+    // directory (everywhere else under app-private storage is mount-noexec).
+    // So it's shipped as jniLibs/<abi>/libcpu_benchmark.so and must be
+    // extracted to disk (not mmap'd straight from the APK) to remain executable.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    // terminal-emulator is pulled in transitively.
+    implementation 'com.github.termux.termux-app:terminal-view:v0.118.3'
+    implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
+}

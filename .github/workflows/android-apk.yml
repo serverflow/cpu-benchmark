@@ -1,0 +1,89 @@
+name: Android APK
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/android-apk.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          local-cache: true
+
+      # Native cpu_benchmark binary is built once per ABI and dropped into
+      # android/app/src/main/jniLibs/<abi>/libcpu_benchmark.so — packaged as a
+      # "shared library" purely so Android extracts it to an executable
+      # location (see android/app/build.gradle for why).
+      - name: Build native cpu_benchmark (arm64-v8a)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cmake -B build-android-arm64 -S . \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PORTABLE=ON \
+            -DBUILD_TESTS=OFF
+          cmake --build build-android-arm64 --target cpu_benchmark -j"$(nproc)"
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp build-android-arm64/cpu_benchmark android/app/src/main/jniLibs/arm64-v8a/libcpu_benchmark.so
+
+      - name: Build native cpu_benchmark (armeabi-v7a)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cmake -B build-android-arm32 -S . \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=armeabi-v7a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PORTABLE=ON \
+            -DBUILD_TESTS=OFF
+          cmake --build build-android-arm32 --target cpu_benchmark -j"$(nproc)"
+          mkdir -p android/app/src/main/jniLibs/armeabi-v7a
+          cp build-android-arm32/cpu_benchmark android/app/src/main/jniLibs/armeabi-v7a/libcpu_benchmark.so
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        working-directory: android
+        run: gradle assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sfbench-terminal-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
