@@ -75,6 +75,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # GitHub Actions runners are fresh VMs, so without this AGP generates a
+      # brand new ~/.android/debug.keystore on every run and each build ends
+      # up signed with a different key. Android then silently refuses to
+      # install a new APK "over" the previous one (signature mismatch) --
+      # looks like the app just never updates. Caching the keystore under a
+      # fixed key keeps every build signed the same way.
+      - name: Cache debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
