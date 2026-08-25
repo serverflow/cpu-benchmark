@@ -30,7 +30,7 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
-          local-cache: true
+          local-cache: false
 
       # Native cpu_benchmark binary is built once per ABI and dropped into
       # android/app/src/main/jniLibs/<abi>/libcpu_benchmark.so — packaged as a
