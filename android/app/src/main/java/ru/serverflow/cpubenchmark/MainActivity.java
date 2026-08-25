@@ -81,7 +81,14 @@ public class MainActivity extends Activity implements TerminalSessionClient, Ter
             "cpu_benchmark; " +
             "exec /system/bin/sh -i";
 
-        String[] args = { "-c", startupCommand };
+        // JNI.createSubprocess() calls execvp(cmd, argv) with this array used
+        // verbatim as argv — it does NOT prepend argv[0] itself. So argv[0]
+        // must be a program-name placeholder, or "-c" ends up in the argv[0]
+        // slot (shell ignores it there, since option parsing starts at
+        // argv[1]) and the actual command string gets treated as a script
+        // *path* to open instead of inline code — sh fails instantly, the
+        // session exits, and onSessionFinished() closes the activity.
+        String[] args = { "sh", "-c", startupCommand };
 
         List<String> envList = new ArrayList<>();
         envList.add("HOME=" + cwd);
