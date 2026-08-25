@@ -43,6 +43,13 @@ public class MainActivity extends Activity implements TerminalSessionClient, Ter
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         terminalView = new TerminalView(this, null);
+        // TerminalView is a plain View, not focusable by default. Termux's own
+        // app only works because its XML layout sets focusableInTouchMode; we
+        // build the view in code, so it must be set explicitly, or
+        // requestFocus() below silently fails and the IME never gets a view
+        // to attach to (soft keyboard never opens).
+        terminalView.setFocusable(true);
+        terminalView.setFocusableInTouchMode(true);
         terminalView.setTextSize(32);
         terminalView.setTerminalViewClient(this);
         setContentView(terminalView);
@@ -57,6 +64,18 @@ public class MainActivity extends Activity implements TerminalSessionClient, Ter
         super.onResume();
         terminalView.onScreenUpdated();
         showKeyboard();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // showSoftInput() calls made before the window actually has focus
+        // (e.g. straight from onResume()) can be silently dropped by the
+        // system, so re-request the keyboard once focus is confirmed.
+        if (hasFocus) {
+            terminalView.requestFocus();
+            showKeyboard();
+        }
     }
 
     private TerminalSession createSession() {
