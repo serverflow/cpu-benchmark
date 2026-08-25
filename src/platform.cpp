@@ -16,6 +16,12 @@
     #include <pdhmsg.h>
     #include <vector>
     #include <mutex>
+#elif defined(__ANDROID__)
+    #include <fstream>
+    #include <sstream>
+    #include <sys/utsname.h>
+    #include <unistd.h>
+    #include <sys/system_properties.h>
 #elif defined(__linux__)
     #include <fstream>
     #include <sstream>
@@ -33,6 +39,76 @@
         #include <cpuid.h>
     #endif
 #endif
+
+#if defined(__ANDROID__)
+// Read an Android system property (e.g. "ro.product.model") via the bionic
+// __system_property_get API. Returns "" if the property is unset/unknown.
+static std::string android_get_prop(const char* name) {
+    char value[PROP_VALUE_MAX] = {0};
+    int len = __system_property_get(name, value);
+    if (len > 0) {
+        return std::string(value, static_cast<size_t>(len));
+    }
+    return "";
+}
+
+// Best-effort SoC/chipset name using whichever property the vendor populated.
+static std::string android_get_soc_model() {
+    static const char* soc_props[] = {
+        "ro.soc.model",
+        "ro.chipname",
+        "ro.hardware.chipname",
+        "ro.board.platform",
+        "ro.product.board",
+    };
+    for (const char* prop : soc_props) {
+        std::string value = android_get_prop(prop);
+        if (!value.empty() && value != "unknown") {
+            return value;
+        }
+    }
+    return "";
+}
+
+// Friendly "Manufacturer Model" label for the device, e.g. "Xiaomi 23113RKC6C".
+static std::string android_get_device_label() {
+    std::string manufacturer = android_get_prop("ro.product.manufacturer");
+    std::string model = android_get_prop("ro.product.model");
+    if (!manufacturer.empty() && !model.empty()) {
+        // Avoid redundant "Xiaomi Xiaomi ..." style duplication.
+        if (model.rfind(manufacturer, 0) == 0) {
+            return model;
+        }
+        return manufacturer + " " + model;
+    }
+    if (!model.empty()) return model;
+    return manufacturer;
+}
+#endif
+
+// Map an ARM "CPU implementer" hex code (e.g. "0x51") from /proc/cpuinfo to
+// its vendor name. /proc/cpuinfo only exposes the raw JEDEC-style code, which
+// is not human-readable on its own.
+static std::string arm_implementer_name(const std::string& implementer_code) {
+    if (implementer_code.empty()) return "";
+    std::string code = implementer_code;
+    std::transform(code.begin(), code.end(), code.begin(), ::tolower);
+
+    if (code == "0x41") return "ARM";
+    if (code == "0x42") return "Broadcom";
+    if (code == "0x43") return "Cavium";
+    if (code == "0x44") return "DEC";
+    if (code == "0x4e") return "Nvidia";
+    if (code == "0x50") return "Applied Micro";
+    if (code == "0x51") return "Qualcomm";
+    if (code == "0x53") return "Samsung";
+    if (code == "0x56") return "Marvell";
+    if (code == "0x61") return "Apple";
+    if (code == "0x66") return "Faraday";
+    if (code == "0x69") return "Intel";
+    if (code == "0xc0") return "Ampere";
+    return implementer_code;
+}
 
 // Get fallback CPU name when detection fails
 // Returns string in format "{arch} {cores}C/{threads}T"
@@ -59,6 +135,8 @@ std::string get_arch_string() {
 std::string get_os_name() {
 #ifdef _WIN32
     return "Windows";
+#elif defined(__ANDROID__)
+    return "Android";
 #elif defined(__linux__)
     return "Linux";
 #elif defined(__APPLE__)
@@ -197,7 +275,34 @@ std::string get_os_version() {
     }
     
     return version;
-    
+
+#elif defined(__ANDROID__)
+    // Android: report the actual Android release/SDK level plus the running
+    // kernel, instead of a bare "Linux <kernel>" string. __linux__ is also
+    // defined on Android, so this branch must come before the generic one.
+    std::string release = android_get_prop("ro.build.version.release");
+    std::string sdk = android_get_prop("ro.build.version.sdk");
+    std::string device_label = android_get_device_label();
+
+    std::string version = "Android";
+    if (!release.empty()) {
+        version += " " + release;
+    }
+    if (!sdk.empty()) {
+        version += " (API " + sdk + ")";
+    }
+
+    struct utsname kernel_info {};
+    if (uname(&kernel_info) == 0 && kernel_info.release[0] != '\0') {
+        version += ", kernel " + std::string(kernel_info.release);
+    }
+
+    if (!device_label.empty()) {
+        version += " - " + device_label;
+    }
+
+    return version;
+
 #elif defined(__linux__)
     // Linux: combine the distribution name and running kernel release in one value.
     // This string is also sent as os.version in benchmark submissions.
@@ -775,6 +880,15 @@ unsigned get_socket_count() {
     
     return socket_count > 0 ? socket_count : 1;
     
+#elif defined(__ANDROID__)
+    // Android phones/tablets are always a single SoC. Many vendor kernels
+    // (this device included) misuse physical_package_id to tag big.LITTLE
+    // clusters instead of real sockets, so the generic Linux path below
+    // would misdetect e.g. a 2 big + 6 little octa-core chip as "2 sockets"
+    // -- which then gets classified as a server/NUMA machine downstream.
+    // Genuine multi-socket ARM hardware doesn't run Android, so just report 1.
+    return 1;
+
 #elif defined(__linux__)
     // Linux: count unique physical_package_id values
     std::vector<int> packages;
@@ -871,10 +985,20 @@ std::vector<unsigned> get_cores_for_socket(unsigned socket_id) {
         ptr += info->Size;
     }
     
+#elif defined(__ANDROID__)
+    // Mirrors get_socket_count() always reporting 1 socket on Android: all
+    // cores belong to socket 0 regardless of what physical_package_id claims
+    // per big.LITTLE cluster.
+    if (socket_id == 0) {
+        for (unsigned i = 0; i < get_logical_core_count(); ++i) {
+            cores.push_back(i);
+        }
+    }
+
 #elif defined(__linux__)
     // Linux: find cores with matching physical_package_id
     for (unsigned cpu = 0; cpu < get_logical_core_count(); ++cpu) {
-        std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + 
+        std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
                           "/topology/physical_package_id";
         std::ifstream file(path);
         if (file.is_open()) {
@@ -885,7 +1009,7 @@ std::vector<unsigned> get_cores_for_socket(unsigned socket_id) {
             }
         }
     }
-    
+
 #elif defined(__APPLE__)
     // macOS: typically single socket, return all cores for socket 0
     if (socket_id == 0) {
@@ -2094,11 +2218,15 @@ CpuInfo get_cpu_info() {
     // ARM processors may use different field names
     if (vendor_id.empty()) {
         vendor_id = read_proc_cpuinfo_field("CPU implementer");
-        if (vendor_id.empty()) {
+        if (!vendor_id.empty()) {
+            // /proc/cpuinfo only exposes the raw implementer code (e.g. "0x51"),
+            // not a human-readable vendor name.
+            vendor_id = arm_implementer_name(vendor_id);
+        } else {
             vendor_id = "Unknown";
         }
     }
-    
+
     if (model_name.empty()) {
         model_name = read_proc_cpuinfo_field("Hardware");
         if (model_name.empty()) {
@@ -2111,7 +2239,26 @@ CpuInfo get_cpu_info() {
             }
         }
     }
-    
+
+#if defined(__ANDROID__)
+    // /proc/cpuinfo on Android is frequently generic ("AArch64 Processor
+    // rev 14" or similar) since vendors don't populate the "Hardware" field
+    // consistently and newer Android versions restrict it further. Prefer
+    // the SoC name reported via system properties, and append the device's
+    // manufacturer/model so the result is actually identifiable.
+    {
+        std::string soc_model = android_get_soc_model();
+        std::string device_label = android_get_device_label();
+
+        if (!soc_model.empty()) {
+            model_name = soc_model;
+        }
+        if (!device_label.empty()) {
+            model_name += " (" + device_label + ")";
+        }
+    }
+#endif
+
     info.vendor = vendor_id;
     info.model = model_name;
     info.cache = get_cache_info();

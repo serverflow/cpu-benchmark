@@ -206,6 +206,12 @@ std::string result_submission::build_payload(const BenchmarkResult& result, cons
 #elif defined(__APPLE__)
     oss << "\"name\":\"macOS\",";
     oss << "\"type\":\"darwin\",";
+#elif defined(__ANDROID__)
+    // Must come before __linux__: Android also defines that macro, and
+    // without this branch every Android submission was reported as a plain
+    // Linux box (shown as "server" on the site) instead of a phone/tablet.
+    oss << "\"name\":\"Android\",";
+    oss << "\"type\":\"mobile\",";
 #elif defined(__linux__)
     oss << "\"name\":\"Linux\",";
     oss << "\"type\":\"linux\",";
@@ -747,6 +753,12 @@ static std::string build_compute_payload(const ComputeSubmissionData& compute_da
 #elif defined(__APPLE__)
     oss << "\"name\":\"macOS\",";
     oss << "\"type\":\"darwin\",";
+#elif defined(__ANDROID__)
+    // Must come before __linux__: Android also defines that macro, and
+    // without this branch every Android submission was reported as a plain
+    // Linux box (shown as "server" on the site) instead of a phone/tablet.
+    oss << "\"name\":\"Android\",";
+    oss << "\"type\":\"mobile\",";
 #elif defined(__linux__)
     oss << "\"name\":\"Linux\",";
     oss << "\"type\":\"linux\",";
@@ -935,6 +947,12 @@ static std::string build_precision_all_payload(const PrecisionAllSubmissionData&
 #elif defined(__APPLE__)
     oss << "\"name\":\"macOS\",";
     oss << "\"type\":\"darwin\",";
+#elif defined(__ANDROID__)
+    // Must come before __linux__: Android also defines that macro, and
+    // without this branch every Android submission was reported as a plain
+    // Linux box (shown as "server" on the site) instead of a phone/tablet.
+    oss << "\"name\":\"Android\",";
+    oss << "\"type\":\"mobile\",";
 #elif defined(__linux__)
     oss << "\"name\":\"Linux\",";
     oss << "\"type\":\"linux\",";
@@ -1170,6 +1188,12 @@ static std::string build_full_benchmark_payload(const FullBenchmarkSubmissionDat
 #elif defined(__APPLE__)
     oss << "\"name\":\"macOS\",";
     oss << "\"type\":\"darwin\",";
+#elif defined(__ANDROID__)
+    // Must come before __linux__: Android also defines that macro, and
+    // without this branch every Android submission was reported as a plain
+    // Linux box (shown as "server" on the site) instead of a phone/tablet.
+    oss << "\"name\":\"Android\",";
+    oss << "\"type\":\"mobile\",";
 #elif defined(__linux__)
     oss << "\"name\":\"Linux\",";
     oss << "\"type\":\"linux\",";

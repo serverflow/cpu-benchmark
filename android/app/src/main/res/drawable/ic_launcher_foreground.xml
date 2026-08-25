@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- ">" prompt glyph -->
+    <path
+        android:fillColor="@color/launcher_foreground"
+        android:pathData="M32,34 L54,54 L32,74 L32,66 L44,54 L32,42 Z" />
+    <!-- "_" cursor -->
+    <path
+        android:fillColor="@color/launcher_foreground"
+        android:pathData="M58,68 H78 V76 H58 Z" />
+</vector>
