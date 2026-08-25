@@ -51,10 +51,11 @@ if(BUILD_PORTABLE)
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
             add_compile_options(-msse2)
         elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-            # ARM64: use ARMv8.2-a with FP16 as baseline (covers Apple Silicon, modern ARM servers)
-            # This enables __ARM_FEATURE_FP16_VECTOR_ARITHMETIC for native FP16 support
-            add_compile_options(-march=armv8.2-a+fp16+simd)
-            message(STATUS "ARM64: Enabling FP16 vector arithmetic (-march=armv8.2-a+fp16+simd)")
+            # ARMv8-A with NEON is the documented ARM64 baseline. Enabling
+            # ARMv8.2 globally can emit LSE and FP16 instructions in common
+            # code before runtime feature dispatch has a chance to run.
+            add_compile_options(-march=armv8-a+simd)
+            message(STATUS "ARM64 portable build: Using ARMv8-A + NEON baseline")
         endif()
     endif()
 else()
@@ -64,11 +65,20 @@ else()
         add_compile_options(/arch:AVX2)
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-            # ARM64 development build: always use armv8.2-a+fp16+simd
-            # -march=native on Apple Clang may not enable FP16 vector arithmetic
-            # Explicitly enable it for consistent behavior
-            add_compile_options(-march=armv8.2-a+fp16+simd)
-            message(STATUS "ARM64 dev build: Enabling FP16 vector arithmetic (-march=armv8.2-a+fp16+simd)")
+            if(ENABLE_NATIVE_ARCH)
+                include(CheckCXXCompilerFlag)
+                check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
+                if(COMPILER_SUPPORTS_MARCH_NATIVE)
+                    add_compile_options(-march=native)
+                    message(STATUS "ARM64 dev build: Using native CPU optimizations (-march=native)")
+                else()
+                    add_compile_options(-march=armv8-a+simd)
+                    message(STATUS "ARM64 dev build: -march=native unavailable, using ARMv8-A + NEON baseline")
+                endif()
+            else()
+                add_compile_options(-march=armv8-a+simd)
+                message(STATUS "ARM64 dev build: Native optimizations disabled, using ARMv8-A + NEON baseline")
+            endif()
         elseif(ENABLE_NATIVE_ARCH)
             include(CheckCXXCompilerFlag)
             check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
@@ -154,14 +164,15 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
     # ARM64 platform
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         set_source_files_properties(src/kernels/kernel_scalar.cpp PROPERTIES COMPILE_FLAGS "")
-        # NEON with FP16 support for Apple Silicon and ARMv8.2+ processors
-        # -march=armv8.2-a+fp16+simd enables native FP16 vector arithmetic
-        set_source_files_properties(src/kernels/kernel_neon.cpp PROPERTIES COMPILE_FLAGS "-march=armv8.2-a+fp16+simd -O3 -ffast-math")
-        # Compute kernel uses NEON with FP16 on ARM - optimized for Apple Silicon
+        # These kernels only require baseline ARMv8-A NEON. They inherit the
+        # target-wide architecture flag selected above so development builds
+        # may still use native FP16 when the host supports it.
+        set_source_files_properties(src/kernels/kernel_neon.cpp PROPERTIES COMPILE_FLAGS "-O3 -ffast-math")
+        # Compute kernel uses scalar FP64 and baseline NEON FP32 on ARM.
         # -O3: Maximum optimization
         # -ffast-math: Allow aggressive FP optimizations (safe for benchmarks)
         # -funroll-loops: Help compiler unroll remaining loops
-        set_source_files_properties(src/kernels/kernel_compute.cpp PROPERTIES COMPILE_FLAGS "-march=armv8.2-a+fp16+simd -O3 -ffast-math -funroll-loops")
+        set_source_files_properties(src/kernels/kernel_compute.cpp PROPERTIES COMPILE_FLAGS "-O3 -ffast-math -funroll-loops")
         # AVX-512 compute kernel not applicable on ARM
         set_source_files_properties(src/kernels/kernel_compute_avx512.cpp PROPERTIES COMPILE_FLAGS "")
         # x86 SIMD not applicable on ARM
