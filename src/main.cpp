@@ -313,7 +313,9 @@ int main(int argc, char* argv[]) {
                 // Sync selected_socket to base config for thread pool configuration
                 ext_config.base.selected_socket = ext_config.selected_socket;
                 
-                std::cout << "Restricting benchmark to socket " << ext_config.selected_socket << "\n";
+                if (!ext_config.quiet) {
+                    std::cout << "Restricting benchmark to socket " << ext_config.selected_socket << "\n";
+                }
                 AffinityResult affinity_result = ThreadAffinityManager::set_process_socket_affinity(
                     static_cast<unsigned>(ext_config.selected_socket));
                 if (affinity_result != AffinityResult::Success) {
@@ -325,24 +327,32 @@ int main(int argc, char* argv[]) {
             // Auto-detect optimal size
             TestSize auto_detected = AutoSizeDetector::detect_optimal_size(Precision::Float);
             ext_config.base.size = auto_detected.size;
-            std::cout << "\nAuto-size: " << auto_detected.size.to_string() 
-                      << " (" << auto_detected.description << ", "
-                      << (auto_detected.memory_bytes / (1024*1024)) << " MB)\n";
+            if (!ext_config.quiet) {
+                std::cout << "\nAuto-size: " << auto_detected.size.to_string() 
+                          << " (" << auto_detected.description << ", "
+                          << (auto_detected.memory_bytes / (1024*1024)) << " MB)\n";
+            }
             
             // 1. Warmup phase (2 seconds - same as individual tests)
-            std::cout << "\n[1/3] Warming up CPU (2 seconds)...\n";
+            if (!ext_config.quiet) {
+                std::cout << "\n[1/3] Warming up CPU (2 seconds)...\n";
+            }
             WarmupConfig warmup_config;
             warmup_config.enabled = true;
             warmup_config.duration = std::chrono::seconds(2);
             warmup_config.wait_for_stable_frequency = true;
             WarmupResult warmup_result = WarmupManager::perform_warmup(warmup_config);
-            std::cout << WarmupManager::format_result(warmup_result) << "\n";
+            if (!ext_config.quiet) {
+                std::cout << WarmupManager::format_result(warmup_result) << "\n";
+            }
             
             // Generate session ID to link compute and precision results
             std::string session_id = generate_session_id();
             
             // 2. Compute test
-            std::cout << "\n[2/3] Running compute benchmark (ST + MT)...\n";
+            if (!ext_config.quiet) {
+                std::cout << "\n[2/3] Running compute benchmark (ST + MT)...\n";
+            }
             ComputeSubmissionData compute_data;
             {
                 debug_log("[main] compute run start");
@@ -379,7 +389,9 @@ int main(int argc, char* argv[]) {
             }
             
             // 3. Precision test (--precision=all)
-            std::cout << "\n[3/3] Running precision comparison benchmark...\n";
+            if (!ext_config.quiet) {
+                std::cout << "\n[3/3] Running precision comparison benchmark...\n";
+            }
             PrecisionAllSubmissionData precision_data;
             {
                 Config precision_config = ext_config.base;
@@ -388,7 +400,8 @@ int main(int argc, char* argv[]) {
                 precision_config.selected_socket = ext_config.selected_socket;  // Pass socket selection for NUMA
                 
                 ComparisonTable table = run_all_precision_benchmarks(precision_config, cpu_info, true);
-                std::cout << table.format_text(true);
+                table.set_use_colors(!ext_config.no_color);
+                std::cout << table.format_text(!ext_config.no_color);
                 
                 // Store results for submission
                 for (const auto& r : table.results()) {
@@ -428,47 +441,73 @@ int main(int argc, char* argv[]) {
             WORD savedAttributes = consoleInfo.wAttributes;
             #endif
             
+            const bool use_colors = !ext_config.no_color;
+            
             std::cout << "+---------------------------+------------------+\n";
             std::cout << "|         SCORE             |      VALUE       |\n";
             std::cout << "+---------------------------+------------------+\n";
             
             // ST Score - Cyan color
             #ifdef _WIN32
-            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+            if (use_colors) {
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+            }
             #else
-            std::cout << "\033[1;36m";  // Cyan
+            if (use_colors) {
+                std::cout << "\033[1;36m";  // Cyan
+            }
             #endif
             std::cout << "|  Single-Thread Score      |";
             #ifdef _WIN32
-            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            if (use_colors) {
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            }
             #else
-            std::cout << "\033[1;32m";  // Green
+            if (use_colors) {
+                std::cout << "\033[1;32m";  // Green
+            }
             #endif
             std::cout << std::right << std::setw(14) << compute_data.st_score << "    ";
             #ifdef _WIN32
-            SetConsoleTextAttribute(hConsole, savedAttributes);
+            if (use_colors) {
+                SetConsoleTextAttribute(hConsole, savedAttributes);
+            }
             #else
-            std::cout << "\033[0m";
+            if (use_colors) {
+                std::cout << "\033[0m";
+            }
             #endif
             std::cout << "|\n";
             
             // MT Score - Yellow color
             #ifdef _WIN32
-            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            if (use_colors) {
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            }
             #else
-            std::cout << "\033[1;33m";  // Yellow
+            if (use_colors) {
+                std::cout << "\033[1;33m";  // Yellow
+            }
             #endif
             std::cout << "|  Multi-Thread Score       |";
             #ifdef _WIN32
-            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            if (use_colors) {
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            }
             #else
-            std::cout << "\033[1;32m";  // Green
+            if (use_colors) {
+                std::cout << "\033[1;32m";  // Green
+            }
             #endif
             std::cout << std::right << std::setw(14) << compute_data.mt_score << "    ";
             #ifdef _WIN32
-            SetConsoleTextAttribute(hConsole, savedAttributes);
+            if (use_colors) {
+                SetConsoleTextAttribute(hConsole, savedAttributes);
+            }
             #else
-            std::cout << "\033[0m";
+            if (use_colors) {
+                std::cout << "\033[0m";
+            }
             #endif
             std::cout << "|\n";
             
