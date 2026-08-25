@@ -10,7 +10,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 # Options
 option(ENABLE_OPENMP "Enable OpenMP support" OFF)
-option(BUILD_TESTS "Build tests" ON)
+option(BUILD_TESTS "Build tests" OFF)
 option(ENABLE_NATIVE_ARCH "Enable native CPU optimizations (-march=native)" ON)
 option(BUILD_PORTABLE "Build portable binary with runtime SIMD dispatch" OFF)
 option(USE_RELEASE_BUILD_CONFIG "Include release build configuration module" OFF)
