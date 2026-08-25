@@ -18,6 +18,9 @@ on:
       - '.github/workflows/android-apk.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -81,9 +84,36 @@ jobs:
         working-directory: android
         run: gradle assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload APK (workflow artifact)
         uses: actions/upload-artifact@v4
         with:
           name: sfbench-terminal-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Rename APK for release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p release-assets
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             release-assets/sfbench-terminal-debug.apk
+
+      # Publishes (and overwrites) a single rolling "android-latest" release
+      # on every successful build from main, so there's always one stable
+      # download link with the newest APK instead of digging through
+      # per-run workflow artifacts (which also require a GitHub login).
+      - name: Publish to GitHub Releases
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: "SFBench Terminal (Android) — последняя сборка"
+          body: |
+            Автоматическая debug-сборка APK из ветки `main` (коммит ${{ github.sha }}).
+
+            Собрано под `arm64-v8a` и `armeabi-v7a`. APK подписан отладочным
+            ключом Gradle — при установке может понадобиться разрешить
+            «Установка из неизвестных источников».
+          prerelease: true
+          draft: false
+          files: release-assets/sfbench-terminal-debug.apk
