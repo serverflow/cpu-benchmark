@@ -95,10 +95,12 @@ public class MainActivity extends Activity implements TerminalSessionClient, Ter
             "ln -sf \"" + benchmarkBinary + "\" \"" + cwd + "/bin/cpu_benchmark\"; " +
             "clear; " +
             "echo 'SFBench — Android CPU Benchmark'; " +
-            "echo 'Повторный запуск: cpu_benchmark'; " +
             "echo; " +
-            "cpu_benchmark; " +
-            "exec /system/bin/sh -i";
+            "cpu_benchmark";
+            // No trailing "exec sh -i": once cpu_benchmark returns (after the
+            // test run and its accept/decline-submission prompt), this
+            // "sh -c" process simply exits, the session ends, and
+            // onSessionFinished() closes the activity automatically.
 
         // JNI.createSubprocess() calls execvp(cmd, argv) with this array used
         // verbatim as argv — it does NOT prepend argv[0] itself. So argv[0]
