@@ -880,6 +880,15 @@ unsigned get_socket_count() {
     
     return socket_count > 0 ? socket_count : 1;
     
+#elif defined(__ANDROID__)
+    // Android phones/tablets are always a single SoC. Many vendor kernels
+    // (this device included) misuse physical_package_id to tag big.LITTLE
+    // clusters instead of real sockets, so the generic Linux path below
+    // would misdetect e.g. a 2 big + 6 little octa-core chip as "2 sockets"
+    // -- which then gets classified as a server/NUMA machine downstream.
+    // Genuine multi-socket ARM hardware doesn't run Android, so just report 1.
+    return 1;
+
 #elif defined(__linux__)
     // Linux: count unique physical_package_id values
     std::vector<int> packages;
@@ -976,10 +985,20 @@ std::vector<unsigned> get_cores_for_socket(unsigned socket_id) {
         ptr += info->Size;
     }
     
+#elif defined(__ANDROID__)
+    // Mirrors get_socket_count() always reporting 1 socket on Android: all
+    // cores belong to socket 0 regardless of what physical_package_id claims
+    // per big.LITTLE cluster.
+    if (socket_id == 0) {
+        for (unsigned i = 0; i < get_logical_core_count(); ++i) {
+            cores.push_back(i);
+        }
+    }
+
 #elif defined(__linux__)
     // Linux: find cores with matching physical_package_id
     for (unsigned cpu = 0; cpu < get_logical_core_count(); ++cpu) {
-        std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + 
+        std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
                           "/topology/physical_package_id";
         std::ifstream file(path);
         if (file.is_open()) {
@@ -990,7 +1009,7 @@ std::vector<unsigned> get_cores_for_socket(unsigned socket_id) {
             }
         }
     }
-    
+
 #elif defined(__APPLE__)
     // macOS: typically single socket, return all cores for socket 0
     if (socket_id == 0) {
