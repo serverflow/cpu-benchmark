@@ -17,6 +17,7 @@
     #include <vector>
     #include <mutex>
 #elif defined(__linux__)
+    #include <cctype>
     #include <fstream>
     #include <sstream>
     #include <sys/utsname.h>
@@ -2022,6 +2023,104 @@ static std::string read_proc_cpuinfo_field(const std::string& field) {
     return "";
 }
 
+static std::string to_upper_ascii(std::string value) {
+    for (char& character : value) {
+        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    }
+    return value;
+}
+
+static bool contains_ci(const std::string& haystack, const char* needle) {
+    std::string lowered = haystack;
+    for (char& character : lowered) {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    return lowered.find(needle) != std::string::npos;
+}
+
+// Board / product strings. "Raspberry Pi 4 Model B Rev 1.4" is a board, not a SoC.
+static bool looks_like_board_name(const std::string& name) {
+    return name.find("Raspberry Pi") == 0 || name.find("Rev ") != std::string::npos;
+}
+
+// Generic ARM labels that already appear as junk on the leaderboard.
+static bool is_generic_arm_processor_label(const std::string& name) {
+    return name.find("ARMv") == 0
+        || name.find("AArch64") == 0
+        || name.find("ARM64") == 0
+        || name.find("Processor rev") != std::string::npos;
+}
+
+static std::string usable_cpuinfo_chip_label(const std::string& name) {
+    if (name.empty() || looks_like_board_name(name) || is_generic_arm_processor_label(name)) {
+        return "";
+    }
+    return name;
+}
+
+// compatible is most-specific first. On a Pi 4:
+// raspberrypi,4-model-b\0brcm,bcm2711. Walk from the end and take the first
+// vendor,part that looks like a SoC (has a digit, no "model") → BCM2711.
+static std::string soc_from_device_tree() {
+    const char* paths[] = {
+        "/proc/device-tree/compatible",
+        "/sys/firmware/devicetree/base/compatible"
+    };
+
+    std::string data;
+    for (const char* path : paths) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file) {
+            continue;
+        }
+        std::ostringstream contents;
+        contents << file.rdbuf();
+        data = contents.str();
+        if (!data.empty()) {
+            break;
+        }
+    }
+    if (data.empty()) {
+        return "";
+    }
+
+    std::vector<std::string> entries;
+    size_t start = 0;
+    while (start < data.size()) {
+        size_t end = data.find('\0', start);
+        if (end == std::string::npos) {
+            end = data.size();
+        }
+        if (end > start) {
+            entries.push_back(data.substr(start, end - start));
+        }
+        start = end + 1;
+    }
+
+    for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry) {
+        size_t comma = entry->find(',');
+        if (comma == std::string::npos || comma == 0 || comma + 1 >= entry->size()) {
+            continue;
+        }
+        std::string part = entry->substr(comma + 1);
+        if (part.empty() || contains_ci(part, "model")) {
+            continue;
+        }
+        bool has_digit = false;
+        for (unsigned char character : part) {
+            if (std::isdigit(character)) {
+                has_digit = true;
+                break;
+            }
+        }
+        if (!has_digit) {
+            continue;
+        }
+        return to_upper_ascii(part);
+    }
+    return "";
+}
+
 static unsigned get_physical_cores_linux() {
     // Try to read from /sys/devices/system/cpu
     std::ifstream core_count("/sys/devices/system/cpu/cpu0/topology/core_siblings_list");
@@ -2100,16 +2199,18 @@ CpuInfo get_cpu_info() {
     }
     
     if (model_name.empty()) {
-        model_name = read_proc_cpuinfo_field("Hardware");
-        if (model_name.empty()) {
-            model_name = read_proc_cpuinfo_field("Processor");
-            if (model_name.empty()) {
-                // Fallback: return arch with core count
-                unsigned logical = get_logical_core_count();
-                unsigned physical = get_physical_cores_linux();
-                model_name = get_fallback_cpu_name(get_arch_string(), physical, logical);
-            }
-        }
+        model_name = soc_from_device_tree();
+    }
+    if (model_name.empty()) {
+        model_name = usable_cpuinfo_chip_label(read_proc_cpuinfo_field("Hardware"));
+    }
+    if (model_name.empty()) {
+        model_name = usable_cpuinfo_chip_label(read_proc_cpuinfo_field("Processor"));
+    }
+    if (model_name.empty()) {
+        unsigned logical = get_logical_core_count();
+        unsigned physical = get_physical_cores_linux();
+        model_name = get_fallback_cpu_name(get_arch_string(), physical, logical);
     }
     
     info.vendor = vendor_id;
