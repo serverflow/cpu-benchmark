@@ -5,9 +5,12 @@
 
 #include <string>
 #include <vector>
-#include <optional>
 #include <cmath>
 #include <algorithm>
+
+#if !defined(SFBENCH_K1OM)
+    #include <optional>
+#endif
 
 // Reference CPU data entry
 struct ReferenceCpuData {
@@ -29,6 +32,35 @@ struct ReferenceCpuData {
         : name(n), vendor(v), cores(c), threads(t), score(s)
         , gflops_st(gst), gflops_mt(gmt), bandwidth_gbps(bw) {}
 };
+
+#if defined(SFBENCH_K1OM)
+template<typename T>
+class ReferenceOptional {
+public:
+    ReferenceOptional() : has_value_(false), value_() {}
+    ReferenceOptional(const T& value) : has_value_(true), value_(value) {}
+
+    bool has_value() const { return has_value_; }
+    const T& value() const { return value_; }
+    explicit operator bool() const { return has_value_; }
+    const T& operator*() const { return value_; }
+    const T* operator->() const { return &value_; }
+
+private:
+    bool has_value_;
+    T value_;
+};
+
+using ReferenceCpuDataOptional = ReferenceOptional<ReferenceCpuData>;
+inline ReferenceCpuDataOptional no_reference_cpu_data() {
+    return ReferenceCpuDataOptional();
+}
+#else
+using ReferenceCpuDataOptional = std::optional<ReferenceCpuData>;
+inline ReferenceCpuDataOptional no_reference_cpu_data() {
+    return std::nullopt;
+}
+#endif
 
 // Comparison status indicator
 //  Indicate whether performance is above or below reference
@@ -73,7 +105,7 @@ public:
     }
     
     // Find reference by name (partial match)
-    std::optional<ReferenceCpuData> find_by_name(const std::string& name) const {
+    ReferenceCpuDataOptional find_by_name(const std::string& name) const {
         std::string lower_name = to_lower(name);
         
         for (const auto& ref : references_) {
@@ -81,13 +113,13 @@ public:
                 return ref;
             }
         }
-        return std::nullopt;
+        return no_reference_cpu_data();
     }
-    
+
     // Find closest reference by score
-    std::optional<ReferenceCpuData> find_closest_by_score(int score) const {
+    ReferenceCpuDataOptional find_closest_by_score(int score) const {
         if (references_.empty()) {
-            return std::nullopt;
+            return no_reference_cpu_data();
         }
         
         auto closest = std::min_element(references_.begin(), references_.end(),

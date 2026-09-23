@@ -19,7 +19,9 @@ inline FP16Mode get_actual_fp16_mode();
 inline std::string format_simd_capabilities(const CpuCapabilities& caps) {
     std::ostringstream oss;
     
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    oss << "  Intel MIC IMCI:" << (caps.has_mic_imci ? "Yes" : "No") << "\n";
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     oss << "  SSE2:          " << (caps.has_sse2 ? "Yes" : "No") << "\n";
     oss << "  SSE4.2:        " << (caps.has_sse4_2 ? "Yes" : "No") << "\n";
     oss << "  AVX:           " << (caps.has_avx ? "Yes" : "No") << "\n";
@@ -116,6 +118,10 @@ inline std::string format_cache_info(const CacheInfo& cache, unsigned physical_c
         oss << "  " << std::left << std::setw(label_w) << label << value << "\n";
     };
 
+#if defined(SFBENCH_K1OM)
+    cache_row("Topology:", "per-core private caches, no shared L3");
+#endif
+
     // L1 Cache
     if (cache.l1_available) {
         if (cache.l1_inst_size > 0) {
@@ -147,6 +153,8 @@ inline std::string format_cache_info(const CacheInfo& cache, unsigned physical_c
 #if defined(__APPLE__) && defined(__aarch64__)
         // Apple Silicon uses System Level Cache (SLC) instead of traditional L3
         cache_row("L3 Cache:", "Distributed (SLC)");
+#elif defined(SFBENCH_K1OM)
+        cache_row("L3 Cache:", "None on Knights Corner");
 #else
         cache_row("L3 Cache:", "N/A");
 #endif
@@ -189,6 +197,7 @@ inline std::string get_fp16_mode_string(const CpuCapabilities& caps) {
 inline std::string format_simd_capabilities_json(const CpuCapabilities& caps) {
     std::ostringstream oss;
     oss << "{\n";
+    oss << "      \"mic_imci\": " << (caps.has_mic_imci ? "true" : "false") << ",\n";
     oss << "      \"sse2\": " << (caps.has_sse2 ? "true" : "false") << ",\n";
     oss << "      \"sse4_2\": " << (caps.has_sse4_2 ? "true" : "false") << ",\n";
     oss << "      \"avx\": " << (caps.has_avx ? "true" : "false") << ",\n";

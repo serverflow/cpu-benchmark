@@ -143,6 +143,11 @@ void print_cpu_info(const CpuInfo& cpu_info) {
     rows.emplace_back("Vendor", cpu_info.vendor);
     rows.emplace_back("Model", cpu_info.model);
 
+#if defined(SFBENCH_K1OM)
+    rows.emplace_back("Core Types", "N/A - homogeneous K1OM cores");
+    rows.emplace_back("Threading", std::to_string(cpu_info.physical_cores) +
+                                   " cores x 4 hardware threads");
+#else
     std::vector<unsigned> p_cores = get_performance_cores();
     if (!p_cores.empty() && p_cores.size() < cpu_info.logical_cores) {
         std::string p_core_info = std::to_string(p_cores.size()) + " P-threads, " +
@@ -150,6 +155,7 @@ void print_cpu_info(const CpuInfo& cpu_info) {
         rows.emplace_back("Core Types", p_core_info);
         rows.emplace_back("Best ST Core", "CPU " + std::to_string(get_best_performance_core()));
     }
+#endif
 
     int label_w = 18;
     int value_w = 40;
@@ -363,7 +369,11 @@ int main(int argc, char* argv[]) {
                 compute_data.mt_score = compute_results.mt_score;
                 compute_data.mt_threads = compute_results.multi_thread.threads;
                 compute_data.overall_score = compute_results.overall_score;
+#if defined(SFBENCH_K1OM)
+                compute_data.simd_level = "mic_imci_fp64_one_active_lane";
+#else
                 compute_data.simd_level = "scalar_fp64";
+#endif
                 compute_data.socket_count = static_cast<int>(get_socket_count());
                 compute_data.selected_socket = ext_config.selected_socket;
                 compute_data.os_version = os_version;
@@ -662,11 +672,11 @@ int main(int argc, char* argv[]) {
                     break;
                 case OutputFormat::Csv:
                     output = "test,type,threads,time_sec,gflops,score\n";
-                    output += "single_core,scalar_fp64," + std::to_string(compute_results.single_thread.threads) + ",";
+                    output += "single_core," + compute_results.single_thread.test_type + "," + std::to_string(compute_results.single_thread.threads) + ",";
                     output += std::to_string(compute_results.single_thread.time_sec) + ",";
                     output += std::to_string(compute_results.single_thread.gflops) + ",";
                     output += std::to_string(compute_results.st_score) + "\n";
-                    output += "all_cores,scalar_fp64," + std::to_string(compute_results.multi_thread.threads) + ",";
+                    output += "all_cores," + compute_results.multi_thread.test_type + "," + std::to_string(compute_results.multi_thread.threads) + ",";
                     output += std::to_string(compute_results.multi_thread.time_sec) + ",";
                     output += std::to_string(compute_results.multi_thread.gflops) + ",";
                     output += std::to_string(compute_results.mt_score) + "\n";
@@ -698,7 +708,11 @@ int main(int argc, char* argv[]) {
                     compute_data.mt_threads = compute_results.multi_thread.threads;
                     
                     compute_data.overall_score = compute_results.overall_score;
+#if defined(SFBENCH_K1OM)
+                    compute_data.simd_level = "mic_imci_fp64_one_active_lane";
+#else
                     compute_data.simd_level = "scalar_fp64";  // Score basis
+#endif
                     
                     // Add socket and OS info
                     compute_data.socket_count = static_cast<int>(get_socket_count());

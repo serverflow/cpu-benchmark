@@ -519,6 +519,7 @@ inline std::string format_json_with_system_info(
     
     // SIMD capabilities (Requirement 2.4)
     oss << "    \"simd_capabilities\": {\n";
+    oss << "      \"mic_imci\": " << (caps.has_mic_imci ? "true" : "false") << ",\n";
     oss << "      \"sse2\": " << (caps.has_sse2 ? "true" : "false") << ",\n";
     oss << "      \"sse4_2\": " << (caps.has_sse4_2 ? "true" : "false") << ",\n";
     oss << "      \"avx\": " << (caps.has_avx ? "true" : "false") << ",\n";

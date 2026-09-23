@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <memory>
+#include "k1om_compat.hpp"
 
 // Work item for the thread pool
 struct WorkItem {
@@ -177,7 +178,9 @@ void PersistentThreadPool::parallel_for_z(size_t Nz, Func&& func) {
     
     // Submit all but last range to thread pool
     for (size_t i = 0; i < ranges.size() - 1; ++i) {
-        submit([&func, begin = ranges[i].first, end = ranges[i].second]() {
+        const size_t begin = ranges[i].first;
+        const size_t end = ranges[i].second;
+        submit([&func, begin, end]() {
             func(begin, end);
         });
     }

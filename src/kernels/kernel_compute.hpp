@@ -77,12 +77,18 @@ size_t avx512_double(double* result, size_t iterations);
 // Optimized for Apple M-series with 4 FMA units per core
 size_t neon_double(double* result, size_t iterations);
 
+// Intel Xeon Phi Knights Corner / MIC compute kernels.
+// K1OM uses explicit IMCI assembly; other targets use portable fallbacks.
+size_t mic_imci_double(double* result, size_t iterations);
+size_t mic_imci_score_double(double* result, size_t iterations);
+
 // Float versions for single precision compute tests (SIMD informational only)
 size_t sse2_float(float* result, size_t iterations);
 size_t avx_float(float* result, size_t iterations);
 size_t avx2_float(float* result, size_t iterations);
 size_t avx512_float(float* result, size_t iterations);
 size_t neon_float(float* result, size_t iterations);
+size_t mic_imci_float(float* result, size_t iterations);
 
 } // namespace compute
 } // namespace kernels

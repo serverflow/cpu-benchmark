@@ -5,6 +5,7 @@
 #include <thread>
 #include <cstring>
 #include <set>
+#include <map>
 #include <algorithm>
 
 // Platform-specific includes
@@ -19,7 +20,6 @@
 #elif defined(__linux__)
     #include <fstream>
     #include <sstream>
-    #include <sys/utsname.h>
     #include <unistd.h>
 #elif defined(__APPLE__)
     #include <sys/sysctl.h>
@@ -28,7 +28,7 @@
 #endif
 
 // x86-64 CPUID includes
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if !defined(SFBENCH_K1OM) && (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86))
     #ifndef _WIN32
         #include <cpuid.h>
     #endif
@@ -40,9 +40,72 @@ std::string get_fallback_cpu_name(const std::string& arch, unsigned physical_cor
     return arch + " " + std::to_string(physical_cores) + "C/" + std::to_string(logical_cores) + "T";
 }
 
+std::vector<unsigned> get_core_first_logical_cpu_order() {
+    unsigned logical = get_logical_core_count();
+    std::vector<unsigned> fallback;
+    fallback.reserve(logical);
+    for (unsigned cpu = 0; cpu < logical; ++cpu) {
+        fallback.push_back(cpu);
+    }
+
+#if defined(__linux__)
+    typedef std::pair<unsigned, unsigned> PhysicalCoreKey;
+    std::map<PhysicalCoreKey, std::vector<unsigned>> siblings_by_core;
+
+    for (unsigned cpu = 0; cpu < logical; ++cpu) {
+        const std::string base = "/sys/devices/system/cpu/cpu" +
+                                 std::to_string(cpu) + "/topology/";
+        std::ifstream core_file(base + "core_id");
+        if (!core_file.is_open()) {
+            return fallback;
+        }
+
+        unsigned core_id = 0;
+        core_file >> core_id;
+        if (core_file.fail()) {
+            return fallback;
+        }
+
+        unsigned package_id = 0;
+        std::ifstream package_file(base + "physical_package_id");
+        if (package_file.is_open()) {
+            package_file >> package_id;
+            if (package_file.fail()) {
+                package_id = 0;
+            }
+        }
+        siblings_by_core[PhysicalCoreKey(package_id, core_id)].push_back(cpu);
+    }
+
+    std::vector<unsigned> order;
+    order.reserve(logical);
+    for (size_t sibling_index = 0; order.size() < logical; ++sibling_index) {
+        bool added = false;
+        for (std::map<PhysicalCoreKey, std::vector<unsigned>>::const_iterator it =
+                 siblings_by_core.begin(); it != siblings_by_core.end(); ++it) {
+            if (sibling_index < it->second.size()) {
+                order.push_back(it->second[sibling_index]);
+                added = true;
+            }
+        }
+        if (!added) {
+            break;
+        }
+    }
+
+    if (order.size() == logical) {
+        return order;
+    }
+#endif
+
+    return fallback;
+}
+
 // Get architecture string using preprocessor macros 
 std::string get_arch_string() {
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(SFBENCH_K1OM)
+    return "k1om";
+#elif defined(__x86_64__) || defined(_M_X64)
     return "x86_64";
 #elif defined(__aarch64__) || defined(_M_ARM64)
     return "arm64";
@@ -199,13 +262,12 @@ std::string get_os_version() {
     return version;
     
 #elif defined(__linux__)
-    // Linux: combine the distribution name and running kernel release in one value.
-    // This string is also sent as os.version in benchmark submissions.
-    std::string pretty_name;
+    // Linux: try /etc/os-release first
     std::ifstream os_release("/etc/os-release");
     if (os_release.is_open()) {
         std::string line;
-
+        std::string pretty_name;
+        
         while (std::getline(os_release, line)) {
             if (line.find("PRETTY_NAME=") == 0) {
                 pretty_name = line.substr(12);
@@ -216,47 +278,27 @@ std::string get_os_version() {
                 if (!pretty_name.empty() && pretty_name.back() == '"') {
                     pretty_name.pop_back();
                 }
-                break;
+                return pretty_name;
             }
         }
     }
-
-    std::string kernel_release;
-    struct utsname kernel_info {};
-    if (uname(&kernel_info) == 0 && kernel_info.release[0] != '\0') {
-        kernel_release = kernel_info.release;
-    }
-
-    // Fallback for restricted environments where uname is unavailable.
-    if (kernel_release.empty()) {
-        std::ifstream version_file("/proc/version");
-        if (version_file.is_open()) {
-            std::string version;
-            std::getline(version_file, version);
-            // Extract kernel version
-            size_t pos = version.find("Linux version ");
+    
+    // Fallback: try uname
+    std::ifstream version_file("/proc/version");
+    if (version_file.is_open()) {
+        std::string version;
+        std::getline(version_file, version);
+        // Extract kernel version
+        size_t pos = version.find("Linux version ");
+        if (pos != std::string::npos) {
+            version = version.substr(pos + 14);
+            pos = version.find(' ');
             if (pos != std::string::npos) {
-                version = version.substr(pos + 14);
-                pos = version.find(' ');
-                if (pos != std::string::npos) {
-                    kernel_release = version.substr(0, pos);
-                } else if (!version.empty()) {
-                    kernel_release = version;
-                }
+                return "Linux " + version.substr(0, pos);
             }
         }
     }
-
-    if (!pretty_name.empty() && !kernel_release.empty()) {
-        return pretty_name + " " + kernel_release;
-    }
-    if (!pretty_name.empty()) {
-        return pretty_name;
-    }
-    if (!kernel_release.empty()) {
-        return "Linux " + kernel_release;
-    }
-
+    
     return "Linux";
     
 #elif defined(__APPLE__)
@@ -1334,7 +1376,7 @@ static CacheInfo get_cache_info_windows() {
 }
 #endif // _WIN32
 
-#if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && !defined(_WIN32)
+#if !defined(SFBENCH_K1OM) && (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && !defined(_WIN32)
 // x86-64 cache detection using CPUID leaf 4 (Linux/macOS)
 
 static void cpuid_ex(int info[4], int function_id, int sub_function) {
@@ -1815,10 +1857,24 @@ static CacheInfo get_cache_info_arm64_macos() {
 
 // Main cache detection function
 CacheInfo get_cache_info() {
-#ifdef _WIN32
+#if defined(SFBENCH_K1OM)
+    CacheInfo cache;
+    // Knights Corner exposes private per-core L1I/L1D and L2 caches via sysfs.
+    // Keep explicit fallback values because some MPSS images provide incomplete
+    // cache metadata to generic Linux detection paths.
+    cache.l1_inst_size = 32 * 1024;
+    cache.l1_data_size = 32 * 1024;
+    cache.l2_size = 512 * 1024;
+    cache.l3_size = 0;
+    cache.cache_line_size = 64;
+    cache.l1_available = true;
+    cache.l2_available = true;
+    cache.l3_available = false;
+    return cache;
+#elif defined(_WIN32)
     // Windows: use GetLogicalProcessorInformation API
     return get_cache_info_windows();
-#elif defined(__x86_64__) || defined(__i386__)
+#elif !defined(SFBENCH_K1OM) && (defined(__x86_64__) || defined(__i386__))
     #if defined(__linux__)
         // Linux x86: prefer sysfs (more accurate for multi-CCX/multi-socket)
         CacheInfo cache = get_cache_info_x86_sysfs();

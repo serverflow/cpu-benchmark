@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
 project(cpu_benchmark VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -14,6 +17,19 @@ option(BUILD_TESTS "Build tests" ON)
 option(ENABLE_NATIVE_ARCH "Enable native CPU optimizations (-march=native)" ON)
 option(BUILD_PORTABLE "Build portable binary with runtime SIMD dispatch" OFF)
 option(USE_RELEASE_BUILD_CONFIG "Include release build configuration module" OFF)
+option(BUILD_K1OM "Build for Intel Xeon Phi Knights Corner (k1om/MIC)" ON)
+
+if(NOT BUILD_K1OM OR NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "k1om")
+    message(FATAL_ERROR "This frozen branch only supports K1OM. Configure with -DCMAKE_TOOLCHAIN_FILE=cmake/k1om-gcc.cmake")
+endif()
+
+if(BUILD_K1OM)
+    message(STATUS "Building Intel Xeon Phi Knights Corner (k1om/MIC) binary")
+    enable_language(ASM)
+    set(CMAKE_CXX_STANDARD 11)
+    set(BUILD_TESTS OFF CACHE BOOL "Build tests" FORCE)
+    set(ENABLE_NATIVE_ARCH OFF CACHE BOOL "Enable native CPU optimizations (-march=native)" FORCE)
+endif()
 
 # Include release build configuration if requested
 # This provides optimized settings for portable release builds
@@ -23,7 +39,9 @@ endif()
 
 # Static linking configuration for portable builds
 
-if(BUILD_PORTABLE)
+if(BUILD_K1OM)
+    message(STATUS "K1OM build: disabling host-native and regular x86 SIMD compiler flags")
+elseif(BUILD_PORTABLE)
     message(STATUS "Building portable binary with static linking")
     
     if(MSVC)
@@ -38,7 +56,9 @@ if(BUILD_PORTABLE)
 endif()
 
 # SIMD optimization configuration
-if(BUILD_PORTABLE)
+if(BUILD_K1OM)
+    message(STATUS "K1OM build: skipping host-native SIMD defaults")
+elseif(BUILD_PORTABLE)
     # Portable build: compile with baseline only, use runtime dispatch
     # Do NOT use -march=native for release builds
     message(STATUS "Building portable binary with runtime SIMD dispatch")
@@ -100,7 +120,6 @@ set(BENCHMARK_SOURCES
     src/score_calculator.cpp
     src/thread_affinity.cpp
     src/persistent_thread_pool.cpp
-    src/server_performance.cpp
     src/result_submission.cpp
 )
 
@@ -114,14 +133,42 @@ set(KERNEL_SOURCES
     src/kernels/kernel_neon.cpp
     src/kernels/kernel_compute.cpp
     src/kernels/kernel_compute_avx512.cpp
+    src/kernels/kernel_compute_mic.cpp
 )
+
+if(BUILD_K1OM)
+    list(APPEND KERNEL_SOURCES src/kernels/kernel_compute_mic_asm.S)
+endif()
 
 # Main executable
 add_executable(cpu_benchmark ${BENCHMARK_SOURCES} ${KERNEL_SOURCES})
 target_include_directories(cpu_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/kernels)
+if(BUILD_K1OM)
+    target_compile_definitions(cpu_benchmark PRIVATE SFBENCH_K1OM=1)
+endif()
+
+add_executable(mic_showcase src/mic_showcase.cpp)
+target_include_directories(mic_showcase PRIVATE ${CMAKE_SOURCE_DIR}/src)
+if(BUILD_K1OM)
+    target_compile_definitions(mic_showcase PRIVATE SFBENCH_K1OM=1)
+endif()
+if(NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(mic_showcase PRIVATE Threads::Threads)
+endif()
 
 # Set per-file compile flags for SIMD kernels
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i686|x86")
+if(BUILD_K1OM)
+    set_source_files_properties(src/kernels/kernel_scalar.cpp PROPERTIES COMPILE_FLAGS "")
+    set_source_files_properties(src/kernels/kernel_sse2.cpp PROPERTIES COMPILE_FLAGS "")
+    set_source_files_properties(src/kernels/kernel_avx.cpp PROPERTIES COMPILE_FLAGS "")
+    set_source_files_properties(src/kernels/kernel_avx2.cpp PROPERTIES COMPILE_FLAGS "")
+    set_source_files_properties(src/kernels/kernel_avx512.cpp PROPERTIES COMPILE_FLAGS "")
+    set_source_files_properties(src/kernels/kernel_neon.cpp PROPERTIES COMPILE_FLAGS "")
+    set_source_files_properties(src/kernels/kernel_compute.cpp PROPERTIES COMPILE_FLAGS "")
+    set_source_files_properties(src/kernels/kernel_compute_avx512.cpp PROPERTIES COMPILE_FLAGS "")
+    set_source_files_properties(src/kernels/kernel_compute_mic.cpp PROPERTIES COMPILE_FLAGS "")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i686|x86")
     # x86/x64 platform
     if(MSVC)
         # MSVC compile flags
@@ -164,6 +211,7 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
         set_source_files_properties(src/kernels/kernel_compute.cpp PROPERTIES COMPILE_FLAGS "-march=armv8.2-a+fp16+simd -O3 -ffast-math -funroll-loops")
         # AVX-512 compute kernel not applicable on ARM
         set_source_files_properties(src/kernels/kernel_compute_avx512.cpp PROPERTIES COMPILE_FLAGS "")
+        set_source_files_properties(src/kernels/kernel_compute_mic.cpp PROPERTIES COMPILE_FLAGS "")
         # x86 SIMD not applicable on ARM
         set_source_files_properties(src/kernels/kernel_sse2.cpp PROPERTIES COMPILE_FLAGS "")
         set_source_files_properties(src/kernels/kernel_avx.cpp PROPERTIES COMPILE_FLAGS "")
@@ -186,8 +234,7 @@ if(WIN32)
     # Windows threading and WinSock for result submission
     # - advapi32: registry access (RegOpenKeyEx, ...)
     # - pdh: real-time CPU frequency sampling (Processor Frequency counter)
-    # - powrprof: temporary High Performance power scheme on Windows Server
-    target_link_libraries(cpu_benchmark PRIVATE ws2_32 advapi32 pdh powrprof)
+    target_link_libraries(cpu_benchmark PRIVATE ws2_32 advapi32 pdh)
 else()
     find_package(Threads REQUIRED)
     target_link_libraries(cpu_benchmark PRIVATE Threads::Threads)
@@ -219,7 +266,6 @@ if(BUILD_TESTS)
         src/score_calculator.cpp
         src/thread_affinity.cpp
         src/persistent_thread_pool.cpp
-        src/server_performance.cpp
         src/result_submission.cpp
         src/kernels/kernel_scalar.cpp
         src/kernels/kernel_sse2.cpp
@@ -229,14 +275,8 @@ if(BUILD_TESTS)
         src/kernels/kernel_neon.cpp
         src/kernels/kernel_compute.cpp
         src/kernels/kernel_compute_avx512.cpp
+        src/kernels/kernel_compute_mic.cpp
     )
-
-    if(WIN32)
-        # LIB_SOURCES includes platform/result-submission/server-performance code.
-        # Make the required Windows system libraries available to all test targets
-        # created below.
-        link_libraries(ws2_32 advapi32 pdh powrprof)
-    endif()
     
     # Common include directories for tests
     set(TEST_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/kernels)

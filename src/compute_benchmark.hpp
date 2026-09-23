@@ -1,12 +1,15 @@
 // CPU Benchmark - Compute Benchmark with ST/MT tests
-// Cross-architecture comparable benchmark using Scalar FP64 as baseline
+// Cross-architecture comparable benchmark using scalar FP64 as baseline.
+// K1OM executes the same eight one-lane FMA chains through masked IMCI because
+// its compiler cannot emit a usable scalar hardware-FMA loop.
 //
 // Design principles:
 // 1. Scalar FP64 FMA is THE baseline for cross-arch comparison (x86 vs ARM)
 // 2. Fixed time measurement (not iterations) - count FLOPs done in N seconds
 // 3. No best-of-N repeats - single timed run after warmup
 // 4. SIMD results are informational only, NOT used for scoring
-// 5. Score is architecture-neutral (based on scalar FP64 GFLOPS)
+// 5. Score uses one active FP64 lane on every architecture. Full-width SIMD
+//    throughput is reported separately and never folded into the score.
 
 #pragma once
 
@@ -17,7 +20,6 @@
 #include "kernels/kernel_compute.hpp"
 #include "persistent_thread_pool.hpp"
 #include "thread_affinity.hpp"
-#include "server_performance.hpp"
 
 #include <vector>
 #include <algorithm>
@@ -52,7 +54,7 @@ inline void compute_debug_log(const std::string& msg) {
 // Compute benchmark result for a single test
 struct ComputeTestResult {
     std::string test_name;
-    std::string test_type;      // "scalar_fp64" or "simd_fp32"
+    std::string test_type;      // "scalar_fp64", "mic_imci_fp64", or "simd_fp32"
     unsigned threads;
     double time_sec;
     double gflops;
@@ -62,19 +64,19 @@ struct ComputeTestResult {
 
 // Full compute benchmark results
 struct ComputeBenchmarkResults {
-    // Primary results (Scalar FP64 - cross-arch comparable)
-    ComputeTestResult single_thread;    // ST scalar FP64
-    ComputeTestResult multi_thread;     // MT scalar FP64
+    // Primary FP64 results. K1OM uses native IMCI with score normalization.
+    ComputeTestResult single_thread;
+    ComputeTestResult multi_thread;
     
     // Informational SIMD results (NOT for cross-arch comparison)
     ComputeTestResult simd_single_thread;
     ComputeTestResult simd_multi_thread;
     bool simd_available;
     
-    // Derived metrics (from scalar FP64 only)
+    // Derived metrics (from the primary FP64 test)
     double mt_speedup;          // MT GFLOPS / ST GFLOPS
     
-    // Scores (based on scalar FP64 only - architecture neutral)
+    // Scores from the one-lane scalar-equivalent FP64 baseline
     int st_score;
     int mt_score;
     int overall_score;
@@ -90,14 +92,6 @@ struct ComputeBenchmarkResults {
     
     // CPU frequency during test
     FrequencyStats frequency;
-
-    // Windows Server performance controls used for this run.
-    bool server_performance_mode = false;
-    bool high_performance_power_scheme = false;
-    bool high_qos = false;
-    bool high_priority = false;
-    int selected_st_core = -1;
-    std::string performance_warning;
 };
 
 // Compute Benchmark class
@@ -106,8 +100,6 @@ public:
     ComputeBenchmark(unsigned threads = 0, bool high_priority = false, int selected_socket = -1)
         : high_priority_(high_priority)
         , selected_socket_(selected_socket)
-        , server_performance_active_(false)
-        , best_st_core_(-1)
     {
         // Determine thread count based on socket selection
         if (selected_socket >= 0) {
@@ -124,8 +116,12 @@ public:
             }
         } else {
             num_threads_ = threads == 0 ? get_logical_core_count() : threads;
+#if defined(SFBENCH_K1OM)
+            socket_cores_ = get_core_first_logical_cpu_order();
+#else
             // Prefer P-cores first when pinning worker threads on hybrid CPUs.
             socket_cores_ = get_preferred_core_order();
+#endif
         }
         
         if (high_priority_) {
@@ -142,20 +138,6 @@ public:
         bool auto_skip_simd = false;
         bool allow_worker_affinity = !env_flag_enabled("SFBENCH_NO_AFFINITY");
         bool allow_st_affinity = allow_worker_affinity && !env_flag_enabled("SFBENCH_NO_ST_AFFINITY");
-
-        // Windows Server defaults are optimized for balanced throughput and can leave a
-        // single busy core in a low P-state. Temporarily switch this process and the
-        // active power scheme to performance-oriented settings. Everything is restored
-        // by the guard before run() returns.
-        const bool allow_server_tuning = !env_flag_enabled("SFBENCH_NO_SERVER_TUNING");
-        ScopedServerPerformance server_performance(allow_server_tuning);
-        const ServerPerformanceStatus& performance_status = server_performance.status();
-        server_performance_active_ = performance_status.active;
-        results.server_performance_mode = performance_status.active;
-        results.high_performance_power_scheme = performance_status.high_performance_scheme;
-        results.high_qos = performance_status.high_qos;
-        results.high_priority = performance_status.high_priority || high_priority_;
-        results.performance_warning = performance_status.warning;
 
 #ifdef _WIN32
         // On multi-socket / multi-group systems, background frequency sampling and ST pinning
@@ -183,7 +165,9 @@ public:
         results.test_duration_sec = test_seconds;
         
         // Architecture detection
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(SFBENCH_K1OM)
+        results.arch = "k1om";
+#elif defined(__aarch64__) || defined(_M_ARM64)
         results.arch = "arm64";
 #else
         results.arch = "x86_64";
@@ -207,24 +191,11 @@ public:
             }
             if (skip_freq) compute_debug_log("[compute] frequency sampling disabled");
             if (!allow_st_affinity) compute_debug_log("[compute] ST affinity disabled");
-            if (performance_status.server_os) {
-                compute_debug_log(std::string("[compute] Windows Server performance mode=") +
-                                  (performance_status.active ? "enabled" : "disabled"));
-                if (!performance_status.warning.empty()) {
-                    compute_debug_log("[compute] performance tuning warning: " +
-                                      performance_status.warning);
-                }
-            }
         }
 
         // Initialize frequency sampler
         FrequencySampler freq_sampler;
         
-        // Select the fastest eligible core after applying the server power policy.
-        // This avoids hard-coding CPU 0 on homogeneous workstation/server CPUs.
-        select_best_st_core(allow_st_affinity);
-        results.selected_st_core = best_st_core_;
-
         // Phase 1: Warmup (split ST vs MT so ST isn't throttled by all-core warmup)
         results.warmup_performed = warmup_seconds > 0.0;
         results.warmup_duration_sec = warmup_seconds;
@@ -232,11 +203,7 @@ public:
         double st_warmup = 0.0;
         double mt_warmup = 0.0;
         if (warmup_seconds > 0.0) {
-            // Server P-state ramp-up is deliberately slower under the default policy.
-            // Give the selected core half of the warmup budget (up to 2 seconds).
-            st_warmup = server_performance_active_
-                ? (std::min)(2.0, warmup_seconds * 0.5)
-                : (std::min)(0.5, warmup_seconds);
+            st_warmup = (std::min)(0.5, warmup_seconds);
             mt_warmup = warmup_seconds - st_warmup;
         }
         if (st_warmup > 0.0) {
@@ -252,7 +219,7 @@ public:
             freq_sampler.start_background(50);
         }
         
-        // Phase 2: Single-thread scalar FP64 test (THE baseline)
+        // Phase 2: Single-thread FP64 scoring test.
         compute_debug_log("[compute] ST scalar start");
         results.single_thread = run_scalar_fp64_test(1, test_seconds, true, allow_st_affinity);
         compute_debug_log("[compute] ST scalar done");
@@ -263,14 +230,20 @@ public:
             compute_debug_log("[compute] warmup mt done");
         }
 
-        // Phase 3: Multi-thread scalar FP64 test
+        // Phase 3: Multi-thread FP64 scoring test.
         compute_debug_log("[compute] MT scalar start");
         results.multi_thread = run_scalar_fp64_test(num_threads_, test_seconds, false, allow_worker_affinity);
         compute_debug_log("[compute] MT scalar done");
         
-        // Phase 4: SIMD tests (informational only)
+        // Phase 4: SIMD tests (informational only). K1OM exposes native FP64
+        // and FP32 throughput in the precision table instead.
+#if defined(SFBENCH_K1OM)
+        bool run_simd = false;
+        results.simd_available = false;
+#else
         bool run_simd = results.simd_available && !skip_simd && !auto_skip_simd;
         results.simd_available = run_simd;
+#endif
         if (run_simd) {
             compute_debug_log("[compute] ST simd start");
             results.simd_single_thread = run_simd_fp32_test(1, test_seconds, allow_st_affinity);
@@ -372,7 +345,11 @@ public:
         oss << line('-');
         
         // Baseline results header
+#if defined(SFBENCH_K1OM)
+        print_full(" BASELINE (MIC IMCI masked FP64) - 1 active lane, 8 FMA chains");
+#else
         print_full(" BASELINE (Scalar FP64) - Used for scoring and cross-arch comparison");
+#endif
         oss << line('-');
         oss << "| " << std::left << std::setw(col_test) << "Test"
             << " | " << std::right << std::setw(col_threads) << "Threads"
@@ -442,18 +419,11 @@ public:
         char speedup_buf[32];
         std::snprintf(speedup_buf, sizeof(speedup_buf), "%.2fx", results.mt_speedup);
         print_summary("Multi-Core Speedup:", speedup_buf);
+#if defined(SFBENCH_K1OM)
+        print_summary("Score Basis:", "MIC IMCI FP64, 1 active lane");
+#else
         print_summary("Score Basis:", "Scalar FP64 (cross-arch)");
-        if (results.server_performance_mode) {
-            print_summary("Server Performance:", "enabled (temporary)");
-            print_summary("Power Scheme:", results.high_performance_power_scheme
-                ? "High Performance" : "unchanged (tuning failed)");
-            print_summary("Process QoS:", results.high_qos ? "HighQoS" : "system managed");
-            print_summary("Process Priority:", results.high_priority ? "High" : "normal");
-            if (results.selected_st_core >= 0) {
-                print_summary("Selected ST Core:", "CPU " +
-                              std::to_string(results.selected_st_core));
-            }
-        }
+#endif
         
         // Show CPU frequency if available
         if (results.frequency.available) {
@@ -465,11 +435,6 @@ public:
         }
         
         oss << line('=');
-
-        if (!results.performance_warning.empty()) {
-            print_full(" WARNING: " + results.performance_warning);
-            oss << line('=');
-        }
         
         // Warning about SIMD comparison
         if (results.simd_available) {
@@ -486,25 +451,25 @@ public:
         std::ostringstream oss;
         oss << "{\n";
         oss << "  \"benchmark_type\": \"compute\",\n";
-        oss << "  \"score_basis\": \"scalar_fp64\",\n";
+        oss << "  \"score_basis\": \""
+#if defined(SFBENCH_K1OM)
+            << "mic_imci_fp64_one_active_lane"
+#else
+            << "scalar_fp64"
+#endif
+            << "\",\n";
+#if defined(SFBENCH_K1OM)
+        oss << "  \"score_active_simd_lanes\": 1,\n";
+#endif
         oss << "  \"architecture\": \"" << results.arch << "\",\n";
         oss << "  \"physical_cores\": " << results.physical_cores << ",\n";
         oss << "  \"logical_cores\": " << results.logical_cores << ",\n";
         oss << "  \"test_duration_sec\": " << results.test_duration_sec << ",\n";
         oss << "  \"warmup_seconds\": " << results.warmup_duration_sec << ",\n";
-        oss << "  \"server_performance\": {\n";
-        oss << "    \"enabled\": " << (results.server_performance_mode ? "true" : "false") << ",\n";
-        oss << "    \"high_performance_power_scheme\": "
-            << (results.high_performance_power_scheme ? "true" : "false") << ",\n";
-        oss << "    \"high_qos\": " << (results.high_qos ? "true" : "false") << ",\n";
-        oss << "    \"high_priority\": " << (results.high_priority ? "true" : "false") << ",\n";
-        oss << "    \"selected_st_core\": " << results.selected_st_core << ",\n";
-        oss << "    \"warning\": \"" << results.performance_warning << "\"\n";
-        oss << "  },\n";
         
         // Baseline results
         oss << "  \"baseline\": {\n";
-        oss << "    \"type\": \"scalar_fp64\",\n";
+        oss << "    \"type\": \"" << results.single_thread.test_type << "\",\n";
         oss << "    \"single_core\": {\n";
         oss << "      \"threads\": " << results.single_thread.threads << ",\n";
         oss << "      \"time_sec\": " << std::fixed << std::setprecision(6) << results.single_thread.time_sec << ",\n";
@@ -545,8 +510,6 @@ private:
     unsigned num_threads_;
     bool high_priority_;
     int selected_socket_;
-    bool server_performance_active_;
-    int best_st_core_;
     std::vector<unsigned> socket_cores_;  // Core IDs for selected socket
 
 
@@ -611,7 +574,13 @@ static std::vector<unsigned> get_preferred_core_order() {
         }
     }
 
-    std::vector<unsigned> get_st_core_candidates() const {
+    void pin_st_thread(bool allow_affinity) const {
+        if (!allow_affinity || !ThreadAffinityManager::is_affinity_supported()) {
+            return;
+        }
+
+        // Keep ST on a single socket in multi-socket systems for consistent scoring.
+        compute_debug_log("[compute][st] pin start");
         auto perf = get_performance_cores();
         unsigned total = get_logical_core_count();
         if (total == 0) total = 1;
@@ -657,92 +626,6 @@ static std::vector<unsigned> get_preferred_core_order() {
         if (candidates.empty()) {
             candidates.push_back(0u);
         }
-
-        return candidates;
-    }
-
-    // Windows Server does not always place a pinned ST workload on a preferred/boosting
-    // core. Benchmark every eligible logical processor briefly and retain the fastest.
-    void select_best_st_core(bool allow_affinity) {
-        best_st_core_ = -1;
-        if (!server_performance_active_ || !allow_affinity ||
-            !ThreadAffinityManager::is_affinity_supported()) {
-            return;
-        }
-
-        const std::vector<unsigned> candidates = get_st_core_candidates();
-        if (candidates.empty()) return;
-
-        constexpr int calibration_passes = 2;
-        constexpr double seconds_per_core = 0.015;
-        constexpr size_t batch_iterations = 25000;
-        std::vector<double> rates(candidates.size(), 0.0);
-        std::vector<unsigned> samples(candidates.size(), 0);
-
-        compute_debug_log("[compute][st] core calibration start, candidates=" +
-                          std::to_string(candidates.size()));
-
-        for (int pass = 0; pass < calibration_passes; ++pass) {
-            for (size_t index = 0; index < candidates.size(); ++index) {
-                const unsigned core = candidates[index];
-                if (ThreadAffinityManager::pin_current_thread(core) != AffinityResult::Success) {
-                    continue;
-                }
-                configure_current_thread_for_performance();
-
-                double dummy = 0.0;
-                size_t total_flops = 0;
-                auto start = std::chrono::steady_clock::now();
-                auto deadline = start + std::chrono::duration<double>(seconds_per_core);
-                do {
-                    total_flops += kernels::compute::scalar_fp64_baseline(
-                        &dummy, batch_iterations);
-                } while (std::chrono::steady_clock::now() < deadline);
-
-                const double elapsed = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - start).count();
-                if (elapsed > 0.0) {
-                    rates[index] += static_cast<double>(total_flops) / elapsed;
-                    ++samples[index];
-                }
-            }
-        }
-
-        double best_rate = -1.0;
-        for (size_t index = 0; index < candidates.size(); ++index) {
-            if (samples[index] == 0) continue;
-            const double average_rate = rates[index] / samples[index];
-            if (average_rate > best_rate) {
-                best_rate = average_rate;
-                best_st_core_ = static_cast<int>(candidates[index]);
-            }
-        }
-
-        if (best_st_core_ >= 0) {
-            ThreadAffinityManager::pin_current_thread(
-                static_cast<unsigned>(best_st_core_));
-            compute_debug_log("[compute][st] selected core=" +
-                              std::to_string(best_st_core_));
-        } else {
-            compute_debug_log("[compute][st] core calibration failed");
-        }
-    }
-
-    void pin_st_thread(bool allow_affinity) {
-        if (!allow_affinity || !ThreadAffinityManager::is_affinity_supported()) {
-            return;
-        }
-
-        compute_debug_log("[compute][st] pin start");
-        if (best_st_core_ >= 0 &&
-            ThreadAffinityManager::pin_current_thread(
-                static_cast<unsigned>(best_st_core_)) == AffinityResult::Success) {
-            compute_debug_log("[compute][st] pin done, calibrated core=" +
-                              std::to_string(best_st_core_));
-            return;
-        }
-
-        const std::vector<unsigned> candidates = get_st_core_candidates();
 
         unsigned fallback = candidates.front();
         bool pinned = false;
@@ -804,16 +687,17 @@ static std::vector<unsigned> get_preferred_core_order() {
 
         for (unsigned t = 0; t < num_threads_; ++t) {
             workers.emplace_back([&, t]() {
-                if (server_performance_active_) {
-                    configure_current_thread_for_performance();
-                }
                 ready.fetch_add(1, std::memory_order_release);
                 while (!start_flag.load(std::memory_order_acquire)) {
                     std::this_thread::yield();
                 }
                 double result = 0;
                 while (!stop_flag.load(std::memory_order_relaxed)) {
+#if defined(SFBENCH_K1OM)
+                    kernels::compute::mic_imci_score_double(&result, batch_iterations);
+#else
                     kernels::compute::scalar_fp64_baseline(&result, batch_iterations);
+#endif
                 }
             });
 
@@ -844,7 +728,11 @@ static std::vector<unsigned> get_preferred_core_order() {
     ComputeTestResult run_scalar_fp64_test(unsigned threads, double test_seconds, bool pin_to_core, bool allow_affinity) {
         ComputeTestResult result;
         result.test_name = (threads == 1) ? "Single-Core" : "All-Cores";
+#if defined(SFBENCH_K1OM)
+        result.test_type = "mic_imci_fp64_one_active_lane";
+#else
         result.test_type = "scalar_fp64";
+#endif
         result.threads = threads;
         
         // For single-thread test, pin to a performance core when available.
@@ -863,14 +751,18 @@ static std::vector<unsigned> get_preferred_core_order() {
             auto end_time = start + std::chrono::duration<double>(test_seconds);
             
             while (std::chrono::steady_clock::now() < end_time) {
+#if defined(SFBENCH_K1OM)
+                total_flops += kernels::compute::mic_imci_score_double(&dummy, batch_iterations);
+#else
                 total_flops += kernels::compute::scalar_fp64_baseline(&dummy, batch_iterations);
+#endif
             }
             
             auto end = std::chrono::steady_clock::now();
             compute_debug_log("[compute][st] loop done");
             result.time_sec = std::chrono::duration<double>(end - start).count();
             result.total_flops = total_flops;
-            result.iterations = total_flops / 16;  // 16 FLOPs per iteration
+            result.iterations = total_flops / 16;
             result.gflops = static_cast<double>(total_flops) / result.time_sec / 1e9;
         } else {
             // Multi-thread: use direct threads for stability on large Windows systems
@@ -888,16 +780,18 @@ static std::vector<unsigned> get_preferred_core_order() {
 
             for (unsigned t = 0; t < threads; ++t) {
                 workers.emplace_back([&, t]() {
-                    if (server_performance_active_) {
-                        configure_current_thread_for_performance();
-                    }
                     ready.fetch_add(1, std::memory_order_release);
                     while (!start_flag.load(std::memory_order_acquire)) {
                         std::this_thread::yield();
                     }
                     size_t local_flops = 0;
                     while (!stop_flag.load(std::memory_order_relaxed)) {
+#if defined(SFBENCH_K1OM)
+                        local_flops += kernels::compute::mic_imci_score_double(
+                            &thread_results[t], batch_iterations);
+#else
                         local_flops += kernels::compute::scalar_fp64_baseline(&thread_results[t], batch_iterations);
+#endif
                     }
                     thread_flops[t] = local_flops;
                 });
@@ -910,7 +804,6 @@ static std::vector<unsigned> get_preferred_core_order() {
                 std::this_thread::yield();
             }
 
-            auto start = std::chrono::steady_clock::now();
             start_flag.store(true, std::memory_order_release);
 
             // Wait for test duration
@@ -922,8 +815,11 @@ static std::vector<unsigned> get_preferred_core_order() {
                 }
             }
             
-            auto end = std::chrono::steady_clock::now();
-            result.time_sec = std::chrono::duration<double>(end - start).count();
+            // Work is admitted only during the requested fixed window. Thread
+            // joins can finish later when a hardware context is descheduled;
+            // that scheduling tail contains no additional admitted batches
+            // and must not reduce the measured device throughput.
+            result.time_sec = test_seconds;
             
             // Sum up FLOPs from all threads
             size_t total_flops = 0;
@@ -980,9 +876,6 @@ static std::vector<unsigned> get_preferred_core_order() {
 
             for (unsigned t = 0; t < threads; ++t) {
                 workers.emplace_back([&, t]() {
-                    if (server_performance_active_) {
-                        configure_current_thread_for_performance();
-                    }
                     ready.fetch_add(1, std::memory_order_release);
                     while (!start_flag.load(std::memory_order_acquire)) {
                         std::this_thread::yield();
@@ -1028,17 +921,16 @@ static std::vector<unsigned> get_preferred_core_order() {
         return result;
     }
     
-    // Calculate scores based on scalar FP64 GFLOPS (architecture-neutral)
+    // Calculate scores from FP64 throughput.
     void calculate_scores(ComputeBenchmarkResults& results) {
         // Score formula: GFLOPS * 100
         // This gives intuitive scores where 10 GFLOPS = 1000 score
-        // Architecture-neutral: same formula for x86 and ARM
         const double SCORE_MULTIPLIER = 100.0;
-        
-        // ST score: direct GFLOPS scaling
+
+        // ST and MT use the same formula on every architecture. K1OM's score
+        // kernel executes one active FP64 lane, so no post-hoc SIMD divisor is
+        // needed. Full-width IMCI throughput remains in the precision table.
         results.st_score = static_cast<int>(results.single_thread.gflops * SCORE_MULTIPLIER);
-        
-        // MT score: direct GFLOPS scaling
         results.mt_score = static_cast<int>(results.multi_thread.gflops * SCORE_MULTIPLIER);
         
         // Overall score: weighted combination
