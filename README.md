@@ -1,30 +1,22 @@
-# SFBench for Intel Xeon Phi (K1OM)
+# SFBench для Intel Xeon Phi (K1OM)
 
-**Frozen video edition: beta 0.48. This branch will not be updated.**
+**Зафиксированная версия для видео: beta 0.48. Эта ветка больше обновляться не будет.**
 
-This branch contains the Xeon Phi Knights Corner build used for the video. It is
-separate from `main`, which targets ordinary CPUs. The prebuilt `artifacts/cpu_benchmark`
-is the preserved video binary, not a fresh or approximate rebuild. It was built
-with K1OM GCC 5.1.1 and reports `SFBench beta 0.48`.
+В этой ветке находится сборка для Xeon Phi Knights Corner, использованная в видео. Она отделена от `main`, где развивается бенчмарк для обычных процессоров. Файл `artifacts/cpu_benchmark` — сохранённый бинарник из видео, а не новая пересборка. Он собран компилятором K1OM GCC 5.1.1 и показывает версию `SFBench beta 0.48`.
 
-## Contents
+## Что находится в ветке
 
-- `artifacts/cpu_benchmark`: K1OM benchmark executable from the video backup.
-- `artifacts/mic_showcase`: companion K1OM showcase executable.
-- `src/`, `cmake/`, `CMakeLists.txt`: source snapshot for the beta 0.48 K1OM build.
-- `video_cases/01_sfbench_fp64.sh`: FP64 scaling and native FP64/FP32 throughput.
-- `video_cases/07_live_thread_monitor.sh`: live usage of all 240 logical CPUs.
+- `artifacts/cpu_benchmark` — исполняемый файл бенчмарка для K1OM из видеобэкапа.
+- `artifacts/mic_showcase` — дополнительная демонстрационная программа для K1OM.
+- `src/`, `cmake/`, `CMakeLists.txt` — снимок исходников для сборки beta 0.48 под K1OM.
+- `video_cases/01_sfbench_fp64.sh` — проверка масштабирования по потокам и производительности FP64/FP32.
+- `video_cases/07_live_thread_monitor.sh` — мониторинг нагрузки на все 240 логических потоков.
 
-The source comes from the archived beta 0.48 production build. Only version
-metadata (`MINOR=48`), the K1OM-only CMake guard and the benchmark script's
-optional installation-path override were changed for this frozen branch. These
-changes do **not** change the preserved executable in `artifacts/`.
+Исходники взяты из архива рабочей сборки beta 0.48. Для этой ветки изменены только числовое поле версии (`MINOR=48`), проверка целевой архитектуры в CMake и возможность указать другой путь установки в сценарии бенчмарка. На сохранённый бинарник в `artifacts/` эти изменения **не влияют**.
 
-## Run on Phi
+## Запуск на Phi
 
-Copy the two executables and `video_cases/` to the already configured Phi,
-for example to `/home/testuser/sfbench/`. Do not try to execute K1OM binaries
-on the x86-64 host. On `mic0`:
+Скопируйте оба исполняемых файла и папку `video_cases/` на уже настроенный Phi, например в `/home/testuser/sfbench/`. Бинарники K1OM нельзя запускать на обычном хосте x86-64. На `mic0` выполните:
 
 ```sh
 cd /home/testuser/sfbench
@@ -33,21 +25,18 @@ chmod +x cpu_benchmark mic_showcase video_cases/*.sh
 ./video_cases/01_sfbench_fp64.sh
 ```
 
-In a second SSH terminal, start the live thread monitor before the benchmark:
+Для съёмки нагрузки откройте второй SSH-терминал и запустите монитор **до** бенчмарка:
 
 ```sh
 cd /home/testuser/sfbench
 ./video_cases/07_live_thread_monitor.sh
 ```
 
-The benchmark script saves JSON and stderr per run under `results/fairness_*`.
-Its default root is `/home/testuser/sfbench`; set `SFBENCH_ROOT` to use a
-different installation directory.
+Сценарий бенчмарка сохраняет JSON и сообщения об ошибках каждого прогона в `results/fairness_*`. По умолчанию он использует каталог `/home/testuser/sfbench`. Если файлы установлены в другом месте, задайте переменную `SFBENCH_ROOT`.
 
-## Rebuild
+## Пересборка из исходников
 
-Requires the Intel MPSS 3.8.6 K1OM cross-toolchain and a compatible Linux build
-host. This repository does not include Intel's SDK or MPSS packages.
+Понадобятся совместимый Linux-хост для сборки и кросс-компилятор K1OM из Intel MPSS 3.8.6. SDK и пакеты MPSS в репозиторий не входят.
 
 ```sh
 cmake -S . -B build-k1om \
@@ -56,15 +45,12 @@ cmake -S . -B build-k1om \
 cmake --build build-k1om -j4
 ```
 
-The branch rejects a non-K1OM CMake target. Rebuilding can produce different
-binary bytes; use `artifacts/cpu_benchmark` to reproduce the video edition.
+CMake в этой ветке отклоняет сборку не для K1OM. При пересборке бинарный файл может отличаться побайтово. Для точного воспроизведения версии из видео используйте `artifacts/cpu_benchmark`.
 
-## Measurement notes
+## Как читать результаты
 
-The compute score uses a one-lane FP64 scoring path for cross-architecture
-comparison. The precision test separately reports full-width native IMCI
-FP64 and FP32 throughput. Do not infer the score from the native IMCI GFLOPS.
-The 60/120/180/240-thread runs use respectively 1/2/3/4 hardware threads per
-physical core. Scores and throughput depend on clock, thermals and system load.
+Для сравнения с другими архитектурами compute-score считается по FP64-пути с одной активной линией. Тест точности отдельно показывает производительность нативных IMCI FP64 и FP32 на полной ширине вектора. Поэтому верхний score нельзя вычислять из показанных нативных IMCI GFLOPS.
 
-SHA-256 checksums are in [`artifacts/SHA256SUMS.txt`](artifacts/SHA256SUMS.txt).
+Прогоны на 60/120/180/240 потоках соответствуют 1/2/3/4 аппаратным потокам на каждое из 60 физических ядер. Результаты зависят от частоты, температуры и фоновой нагрузки.
+
+Контрольные суммы SHA-256 приведены в [`artifacts/SHA256SUMS.txt`](artifacts/SHA256SUMS.txt).
