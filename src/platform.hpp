@@ -87,6 +87,12 @@ CpuInfo get_cpu_info();
 // On Windows, includes all processor groups (>64 logical CPUs).
 unsigned get_logical_core_count();
 
+// Return logical CPU IDs in core-first order: one hardware thread from each
+// physical core first, then the second sibling from each core, and so on.
+// Falls back to the operating system's logical CPU order when topology data
+// is unavailable.
+std::vector<unsigned> get_core_first_logical_cpu_order();
+
 // Get operating system name 
 // Returns "Linux", "Windows", or "Unknown"
 std::string get_os_name();

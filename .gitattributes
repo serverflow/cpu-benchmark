@@ -1,0 +1,5 @@
+*.sh text eol=lf
+*.cmake text eol=lf
+*.S text eol=lf
+artifacts/cpu_benchmark binary
+artifacts/mic_showcase binary

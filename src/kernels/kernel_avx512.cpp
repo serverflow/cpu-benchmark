@@ -5,7 +5,7 @@
 #include "kernel_common.hpp"
 
 // Only compile AVX-512 code on x86 platforms
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if !defined(SFBENCH_K1OM) && (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86))
 
 #ifdef _WIN32
     #include <intrin.h>

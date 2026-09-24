@@ -89,6 +89,15 @@ inline std::pair<unsigned, std::vector<unsigned>> get_thread_config_for_config(c
 
     unsigned num_threads = (config.threads == 0) ? hw : config.threads;
 
+#if defined(SFBENCH_K1OM)
+    // Linux on Knights Corner numbers four SMT siblings next to each other.
+    // Use all physical cores before adding another sibling from each core.
+    std::vector<unsigned> k1om_order = get_core_first_logical_cpu_order();
+    if (!k1om_order.empty()) {
+        return {num_threads, k1om_order};
+    }
+#endif
+
     // Hybrid-aware pinning: prefer P-cores first, then E-cores.
     // This matters when the OS enumerates E-cores with low CPU indices.
     std::vector<unsigned> core_ids;

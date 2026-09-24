@@ -27,6 +27,11 @@ public:
     ThreadPool(unsigned num_threads, const std::vector<unsigned>& core_ids);
     
     ~ThreadPool();
+
+    ThreadPool(const ThreadPool&) = delete;
+    ThreadPool& operator=(const ThreadPool&) = delete;
+    ThreadPool(ThreadPool&&) noexcept = default;
+    ThreadPool& operator=(ThreadPool&&) noexcept = default;
     
     // Partition z-axis for parallel execution 
     std::vector<WorkRange> partition_z(size_t Nz) const;
@@ -75,7 +80,9 @@ void ThreadPool::parallel_for_z(size_t Nz, Func&& func) {
         threads_.reserve(ranges.size());
         for (size_t i = 0; i < ranges.size(); ++i) {
             unsigned core_id = core_ids_[i % core_ids_.size()];
-            threads_.emplace_back([&func, begin = ranges[i].begin, end = ranges[i].end, core_id]() {
+            const size_t begin = ranges[i].begin;
+            const size_t end = ranges[i].end;
+            threads_.emplace_back([&func, begin, end, core_id]() {
                 ThreadAffinityManager::pin_current_thread(core_id);
                 func(begin, end);
             });
@@ -94,7 +101,9 @@ void ThreadPool::parallel_for_z(size_t Nz, Func&& func) {
     threads_.reserve(ranges.size() - 1);
 
     for (size_t i = 0; i < ranges.size() - 1; ++i) {
-        threads_.emplace_back([&func, begin = ranges[i].begin, end = ranges[i].end]() {
+        const size_t begin = ranges[i].begin;
+        const size_t end = ranges[i].end;
+        threads_.emplace_back([&func, begin, end]() {
             func(begin, end);
         });
     }

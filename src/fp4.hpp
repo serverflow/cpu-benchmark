@@ -39,7 +39,7 @@
 // ============================================================================
 
 // Detect x86-64 platform for SIMD
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if !defined(SFBENCH_K1OM) && (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86))
     #define FP4_SIMD_X86 1
 #else
     #define FP4_SIMD_X86 0

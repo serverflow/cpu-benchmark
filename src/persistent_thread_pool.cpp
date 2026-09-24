@@ -91,7 +91,7 @@ PersistentThreadPool::PersistentThreadPool(unsigned num_threads) {
     // Create per-thread work queues 
     work_queues_.reserve(num_threads_);
     for (unsigned i = 0; i < num_threads_; ++i) {
-        work_queues_.push_back(std::make_unique<WorkQueue>());
+        work_queues_.push_back(SFBENCH_MAKE_UNIQUE(WorkQueue));
     }
     
     // Create worker threads
@@ -129,7 +129,7 @@ PersistentThreadPool::PersistentThreadPool(unsigned num_threads, const std::vect
     // Create per-thread work queues 
     work_queues_.reserve(num_threads_);
     for (unsigned i = 0; i < num_threads_; ++i) {
-        work_queues_.push_back(std::make_unique<WorkQueue>());
+        work_queues_.push_back(SFBENCH_MAKE_UNIQUE(WorkQueue));
     }
     
     // Create worker threads

@@ -16,11 +16,14 @@ inline size_t idx(size_t x, size_t y, size_t z, size_t Nx, size_t Ny) {
 #endif
 
 // Function pointer types for kernels
+#ifndef SFBENCH_KERNEL_FN_TYPES_DEFINED
+#define SFBENCH_KERNEL_FN_TYPES_DEFINED
 template<typename T>
 using MemKernelFn = void(*)(T*, const T*, const T*, T, T, size_t, size_t, size_t, size_t, size_t);
 
 template<typename T>
 using StencilKernelFn = void(*)(T*, const T*, T, T, size_t, size_t, size_t, size_t, size_t);
+#endif
 
 // Forward declarations for kernel functions from each SIMD level
 // These are implemented in separate .cpp files compiled with different flags

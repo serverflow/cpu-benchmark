@@ -15,7 +15,7 @@
 // ============================================================================
 
 // Detect x86-64 platform
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if !defined(SFBENCH_K1OM) && (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86))
     #define SIMD_X86 1
 #else
     #define SIMD_X86 0
@@ -1613,11 +1613,14 @@ inline void kernel_stencil_scalar_half(
 // ============================================================================
 
 // Function pointer types for kernels
+#ifndef SFBENCH_KERNEL_FN_TYPES_DEFINED
+#define SFBENCH_KERNEL_FN_TYPES_DEFINED
 template<typename T>
 using MemKernelFn = void(*)(T*, const T*, const T*, T, T, size_t, size_t, size_t, size_t, size_t);
 
 template<typename T>
 using StencilKernelFn = void(*)(T*, const T*, T, T, size_t, size_t, size_t, size_t, size_t);
+#endif
 
 // Get the best available memory kernel for float
 inline MemKernelFn<float> get_mem_kernel_float(bool force_scalar = false) {
@@ -1626,6 +1629,8 @@ inline MemKernelFn<float> get_mem_kernel_float(bool force_scalar = false) {
     }
     
     const auto& caps = CpuCapabilities::get();
+
+    if (caps.has_mic_imci) return kernel_mem_scalar_float;
     
 #if SIMD_AVX2
     if (caps.has_avx2) {
@@ -1658,6 +1663,8 @@ inline MemKernelFn<double> get_mem_kernel_double(bool force_scalar = false) {
     }
     
     const auto& caps = CpuCapabilities::get();
+
+    if (caps.has_mic_imci) return kernel_mem_scalar_double;
     
 #if SIMD_AVX2
     if (caps.has_avx2) {
@@ -1743,21 +1750,22 @@ inline const char* get_selected_kernel_name_float(bool force_scalar = false) {
     if (force_scalar) {
         return "Scalar";
     }
-    
+
     const auto& caps = CpuCapabilities::get();
-    
+
     // Use runtime detection - check capabilities flags set by CpuCapabilities::detect()
     // This ensures consistency with RuntimeDispatcher kernel selection
-    
+    if (caps.has_mic_imci) return "Intel MIC IMCI";
+
     // x86 SIMD (highest to lowest priority)
     if (caps.has_avx512f) return "AVX-512";
     if (caps.has_avx2) return "AVX2";
     if (caps.has_avx) return "AVX";
     if (caps.has_sse2) return "SSE2";
-    
+
     // ARM NEON
     if (caps.has_arm_neon) return "NEON";
-    
+
     return "Scalar";
 }
 
@@ -1765,12 +1773,13 @@ inline const char* get_selected_kernel_name_double(bool force_scalar = false) {
     if (force_scalar) {
         return "Scalar";
     }
-    
+
     const auto& caps = CpuCapabilities::get();
-    
+
     // Use runtime detection - check capabilities flags set by CpuCapabilities::detect()
     // This ensures consistency with RuntimeDispatcher kernel selection
-    
+    if (caps.has_mic_imci) return "Intel MIC IMCI";
+
     // x86 SIMD (highest to lowest priority)
     if (caps.has_avx512f) return "AVX-512";
     if (caps.has_avx2) return "AVX2";

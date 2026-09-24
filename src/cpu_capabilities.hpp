@@ -11,7 +11,7 @@
 #ifdef _WIN32
     #include <intrin.h>
 #elif defined(__linux__) || defined(__APPLE__)
-    #if defined(__x86_64__) || defined(__i386__)
+    #if !defined(SFBENCH_K1OM) && (defined(__x86_64__) || defined(__i386__))
         #include <cpuid.h>
     #endif
     #if defined(__aarch64__)
@@ -30,6 +30,7 @@ enum class SimdLevel {
     AVX = 3,
     AVX2 = 4,
     AVX512 = 5,
+    MIC_IMCI = 6,
     NEON = 10,
     NEON_FP16 = 11
 };
@@ -43,6 +44,7 @@ inline std::string simd_level_to_string(SimdLevel level) {
         case SimdLevel::AVX: return "AVX";
         case SimdLevel::AVX2: return "AVX2";
         case SimdLevel::AVX512: return "AVX-512";
+        case SimdLevel::MIC_IMCI: return "Intel MIC IMCI";
         case SimdLevel::NEON: return "ARM NEON";
         case SimdLevel::NEON_FP16: return "ARM NEON FP16";
     }
@@ -64,6 +66,7 @@ struct CpuCapabilities {
     bool has_avx512f;
     bool has_avx512_fp16;       // AVX-512 FP16 support (x86-64)
     bool has_avx512_vnni;       // AVX-512 VNNI support
+    bool has_mic_imci;          // Intel Xeon Phi Knights Corner IMCI
     
     // ARM64 SIMD 
     bool has_arm_neon;
@@ -89,7 +92,9 @@ private:
 
 // Helper: Check OS support for AVX via XGETBV
 inline bool check_os_avx_support() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         // Check OSXSAVE bit first (CPUID.01H:ECX[bit 27])
         int info[4] = {0};
@@ -122,7 +127,9 @@ inline bool check_os_avx_support() {
 
 // Helper: Check OS support for AVX-512 via XGETBV
 inline bool check_os_avx512_support() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         int info[4] = {0};
         __cpuid(info, 1);
@@ -153,7 +160,9 @@ inline bool check_os_avx512_support() {
 
 // Detect SSE2 support
 inline bool detect_sse2() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         int info[4] = {0};
         __cpuid(info, 1);
@@ -171,7 +180,9 @@ inline bool detect_sse2() {
 
 // Detect SSE4.2 support 
 inline bool detect_sse4_2() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         int info[4] = {0};
         __cpuid(info, 1);
@@ -189,7 +200,9 @@ inline bool detect_sse4_2() {
 
 // Detect AVX support
 inline bool detect_avx() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         int info[4] = {0};
         __cpuid(info, 1);
@@ -209,7 +222,9 @@ inline bool detect_avx() {
 
 // Detect AVX2 support 
 inline bool detect_avx2() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         int info[4] = {0};
         // Check max CPUID level
@@ -234,7 +249,9 @@ inline bool detect_avx2() {
 
 // Detect AVX-512F support 
 inline bool detect_avx512f() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         int info[4] = {0};
         __cpuid(info, 0);
@@ -259,7 +276,9 @@ inline bool detect_avx512f() {
 
 // Detect AVX-512 FP16 support using CPUID on x86-64
 inline bool detect_avx512_fp16() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         int info[4] = {0};
         __cpuid(info, 0);
@@ -283,7 +302,9 @@ inline bool detect_avx512_fp16() {
 
 // Detect AVX-512 VNNI support 
 inline bool detect_avx512_vnni() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return false;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #ifdef _WIN32
         int info[4] = {0};
         __cpuid(info, 0);
@@ -343,6 +364,12 @@ inline bool detect_arm_neon_fp16() {
 // CpuCapabilities implementation
 inline CpuCapabilities CpuCapabilities::detect() {
     CpuCapabilities caps;
+
+#if defined(SFBENCH_K1OM)
+    caps.has_mic_imci = true;
+    caps.fp16_native_available = false;
+    return caps;
+#endif
     
     // x86-64 SIMD detection 
     caps.has_sse2 = detect_sse2();
@@ -371,6 +398,7 @@ inline CpuCapabilities::CpuCapabilities()
     , has_avx512f(false)
     , has_avx512_fp16(false)
     , has_avx512_vnni(false)
+    , has_mic_imci(false)
     , has_arm_neon(false)
     , has_arm_neon_fp16(false)
     , fp16_native_available(false) {
@@ -384,7 +412,9 @@ inline const CpuCapabilities& CpuCapabilities::get() {
 
 // Get highest available SIMD level 
 inline SimdLevel CpuCapabilities::get_simd_level() const {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    return has_mic_imci ? SimdLevel::MIC_IMCI : SimdLevel::Scalar;
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     // x86-64: prefer higher capability level (AVX-512 > AVX2 > AVX > SSE4.2 > SSE2 > Scalar)
     if (has_avx512f) return SimdLevel::AVX512;
     if (has_avx2) return SimdLevel::AVX2;
@@ -405,8 +435,12 @@ inline SimdLevel CpuCapabilities::get_simd_level() const {
 // Get human-readable description of capabilities
 inline std::string CpuCapabilities::to_string() const {
     std::string result = "SIMD Capabilities:\n";
-    
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+
+#if defined(SFBENCH_K1OM)
+    result += "  Intel MIC IMCI: " + std::string(has_mic_imci ? "Yes" : "No") + "\n";
+#endif
+
+#if !defined(SFBENCH_K1OM) && (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86))
     result += "  SSE2:        " + std::string(has_sse2 ? "Yes" : "No") + "\n";
     result += "  SSE4.2:      " + std::string(has_sse4_2 ? "Yes" : "No") + "\n";
     result += "  AVX:         " + std::string(has_avx ? "Yes" : "No") + "\n";
@@ -450,7 +484,11 @@ inline std::string get_cpu_instructions_string() {
     const auto& caps = CpuCapabilities::get();
     std::string result;
     
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(SFBENCH_K1OM)
+    if (caps.has_mic_imci) {
+        result += "MIC_IMCI";
+    }
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     if (caps.has_sse2) {
         if (!result.empty()) result += ",";
         result += "SSE2";

@@ -14,6 +14,7 @@
 #include "simd_kernels.hpp"
 #include "score_calculator.hpp"
 #include "runtime_dispatcher.hpp"
+#include "k1om_compat.hpp"
 
 #include <vector>
 #include <chrono>
@@ -71,9 +72,9 @@ public:
         : use_persistent_(should_use_persistent_pool())
     {
         if (use_persistent_) {
-            persistent_ = std::make_unique<PersistentThreadPool>(num_threads, core_ids);
+            persistent_ = SFBENCH_MAKE_UNIQUE(PersistentThreadPool, num_threads, core_ids);
         } else {
-            simple_ = std::make_unique<ThreadPool>(num_threads, core_ids);
+            simple_ = SFBENCH_MAKE_UNIQUE(ThreadPool, num_threads, core_ids);
             precision_debug_log("[precision] using ThreadPool (persistent disabled)");
         }
     }
@@ -1036,7 +1037,6 @@ private:
             std::atomic<bool> start{false};
             std::chrono::steady_clock::time_point start_time;
             std::chrono::steady_clock::time_point end_time;
-            std::vector<double> thread_times(num_threads, 0.0);
             std::vector<size_t> thread_iters(num_threads, 0);
 
             thread_pool_.parallel_for_z(num_threads, [&](size_t t_begin, size_t t_end) {
@@ -1063,19 +1063,24 @@ private:
                         iters += chunk_iters;
                     }
 
-                    auto stop_time = std::chrono::steady_clock::now();
                     finalize(t);
-                    thread_times[t] = std::chrono::duration<double>(stop_time - start_time).count();
                     thread_iters[t] = iters;
                 }
             });
 
-            double max_time = *std::max_element(thread_times.begin(), thread_times.end());
+            // Every worker runs against the same fixed end_time. A worker can
+            // be descheduled after its last chunk and wake up long after that
+            // deadline, especially with 240 KNC contexts. Charging that idle
+            // scheduling tail to the whole device makes throughput randomly
+            // collapse even though no work was performed during the tail.
+            const double measurement_time =
+                std::chrono::duration<double>(end_time - start_time).count();
             size_t total_iters = std::accumulate(thread_iters.begin(), thread_iters.end(), size_t{0});
             double total_ops = static_cast<double>(total_iters) * static_cast<double>(ops_per_iter);
-            double gflops = (max_time > 0.0) ? (total_ops / max_time / 1e9) : 0.0;
+            double gflops = (measurement_time > 0.0)
+                ? (total_ops / measurement_time / 1e9) : 0.0;
 
-            result.times_sec.push_back(max_time);
+            result.times_sec.push_back(measurement_time);
             gflops_samples.push_back(gflops);
             total_ops_samples.push_back(total_ops);
             iter_samples.push_back(static_cast<double>(total_iters) / static_cast<double>(num_threads));

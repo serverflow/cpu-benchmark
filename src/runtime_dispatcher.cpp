@@ -62,6 +62,7 @@ const char* RuntimeDispatcher::get_active_level_name() {
         case SimdLevel::AVX: return "AVX";
         case SimdLevel::AVX2: return "AVX2";
         case SimdLevel::AVX512: return "AVX-512";
+        case SimdLevel::MIC_IMCI: return "Intel MIC IMCI";
         case SimdLevel::NEON: return "ARM NEON";
         case SimdLevel::NEON_FP16: return "ARM NEON FP16";
     }
@@ -133,6 +134,17 @@ void RuntimeDispatcher::select_kernels(SimdLevel level) {
             stencil_kernel_int8_ = kernels::scalar::stencil_int8;
             compute_kernel_float_ = kernels::compute::neon_float;
             compute_kernel_double_ = kernels::compute::neon_double;
+            break;
+
+        case SimdLevel::MIC_IMCI:
+            mem_kernel_float_ = kernels::scalar::mem_float;
+            mem_kernel_double_ = kernels::scalar::mem_double;
+            mem_kernel_int8_ = kernels::scalar::mem_int8;
+            stencil_kernel_float_ = kernels::scalar::stencil_float;
+            stencil_kernel_double_ = kernels::scalar::stencil_double;
+            stencil_kernel_int8_ = kernels::scalar::stencil_int8;
+            compute_kernel_float_ = kernels::compute::mic_imci_float;
+            compute_kernel_double_ = kernels::compute::mic_imci_double;
             break;
 
         case SimdLevel::Scalar:

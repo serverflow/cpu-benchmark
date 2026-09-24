@@ -1,6 +1,3 @@
-# Local build and verification directories
-build/
-.verify-*/
-.verify-*.obj
-.verify-*.tar.gz
-codemagic.yalm
+/build*/
+/results/
+*.raw.txt
