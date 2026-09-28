@@ -63,6 +63,13 @@
     #define SIMD_NEON 0
 #endif
 
+// RISC-V Vector detection (compile-time: only true inside TUs built with +v)
+#if defined(__riscv) && defined(__riscv_v_intrinsic)
+    #define SIMD_RISCV_V 1
+#else
+    #define SIMD_RISCV_V 0
+#endif
+
 // ============================================================================
 // Include appropriate intrinsics headers
 // ============================================================================
@@ -85,6 +92,34 @@
 
 #if SIMD_NEON
     #include <arm_neon.h>
+#endif
+
+// ============================================================================
+// RISC-V RVV kernels (defined in kernels/kernel_rvv.cpp, compiled with
+// -march=rv64gcv when SFBENCH_RVV_SYMBOLS is set by CMake)
+// ============================================================================
+
+#if defined(SFBENCH_RVV_SYMBOLS) && defined(__riscv)
+void kernel_mem_rvv_float(
+    float* C, const float* A, const float* B,
+    float alpha, float beta,
+    size_t z_begin, size_t z_end,
+    size_t Nx, size_t Ny, size_t Nz);
+void kernel_mem_rvv_double(
+    double* C, const double* A, const double* B,
+    double alpha, double beta,
+    size_t z_begin, size_t z_end,
+    size_t Nx, size_t Ny, size_t Nz);
+void kernel_stencil_rvv_float(
+    float* C, const float* A,
+    float a0, float a1,
+    size_t z_begin, size_t z_end,
+    size_t Nx, size_t Ny, size_t Nz);
+void kernel_stencil_rvv_double(
+    double* C, const double* A,
+    double a0, double a1,
+    size_t z_begin, size_t z_end,
+    size_t Nx, size_t Ny, size_t Nz);
 #endif
 
 // ============================================================================
@@ -1626,7 +1661,12 @@ inline MemKernelFn<float> get_mem_kernel_float(bool force_scalar = false) {
     }
     
     const auto& caps = CpuCapabilities::get();
-    
+
+#if defined(SFBENCH_RVV_SYMBOLS) && defined(__riscv)
+    if (caps.has_riscv_vector) {
+        return kernel_mem_rvv_float;
+    }
+#endif
 #if SIMD_AVX2
     if (caps.has_avx2) {
         return kernel_mem_avx2_float;
@@ -1658,7 +1698,12 @@ inline MemKernelFn<double> get_mem_kernel_double(bool force_scalar = false) {
     }
     
     const auto& caps = CpuCapabilities::get();
-    
+
+#if defined(SFBENCH_RVV_SYMBOLS) && defined(__riscv)
+    if (caps.has_riscv_vector) {
+        return kernel_mem_rvv_double;
+    }
+#endif
 #if SIMD_AVX2
     if (caps.has_avx2) {
         return kernel_mem_avx2_double;
@@ -1685,7 +1730,12 @@ inline StencilKernelFn<float> get_stencil_kernel_float(bool force_scalar = false
     }
     
     const auto& caps = CpuCapabilities::get();
-    
+
+#if defined(SFBENCH_RVV_SYMBOLS) && defined(__riscv)
+    if (caps.has_riscv_vector) {
+        return kernel_stencil_rvv_float;
+    }
+#endif
 #if SIMD_AVX2
     if (caps.has_avx2) {
         return kernel_stencil_avx2_float;
@@ -1717,7 +1767,12 @@ inline StencilKernelFn<double> get_stencil_kernel_double(bool force_scalar = fal
     }
     
     const auto& caps = CpuCapabilities::get();
-    
+
+#if defined(SFBENCH_RVV_SYMBOLS) && defined(__riscv)
+    if (caps.has_riscv_vector) {
+        return kernel_stencil_rvv_double;
+    }
+#endif
 #if SIMD_AVX2
     if (caps.has_avx2) {
         return kernel_stencil_avx2_double;
@@ -1754,10 +1809,13 @@ inline const char* get_selected_kernel_name_float(bool force_scalar = false) {
     if (caps.has_avx2) return "AVX2";
     if (caps.has_avx) return "AVX";
     if (caps.has_sse2) return "SSE2";
-    
+
     // ARM NEON
     if (caps.has_arm_neon) return "NEON";
-    
+
+    // RISC-V
+    if (caps.has_riscv_vector) return "RVV";
+
     return "Scalar";
 }
 
@@ -1779,7 +1837,10 @@ inline const char* get_selected_kernel_name_double(bool force_scalar = false) {
     
     // ARM NEON (has limited double support, but we still use NEON where possible)
     if (caps.has_arm_neon) return "NEON";
-    
+
+    // RISC-V
+    if (caps.has_riscv_vector) return "RVV";
+
     return "Scalar";
 }
 

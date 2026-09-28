@@ -34,6 +34,10 @@ inline std::string format_simd_capabilities(const CpuCapabilities& caps) {
     oss << "  NEON FP16:     " << (caps.has_arm_neon_fp16 ? "Yes" : "No") << "\n";
 #endif
 
+#if defined(__riscv)
+    oss << "  RISC-V V:      " << (caps.has_riscv_vector ? "Yes" : "No") << "\n";
+#endif
+
     // Active FP16 mode - show ACTUAL execution path, not just CPU capability
     // This considers both compile-time support and runtime availability
     oss << "  FP16 Mode:     ";

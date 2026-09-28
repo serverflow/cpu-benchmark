@@ -86,6 +86,23 @@ else()
     endif()
 endif()
 
+# RISC-V RVV kernels: separate TU compiled with V-extension flags; the rest of
+# the binary stays baseline. Runtime dispatch selects them via AT_HWCAP.
+set(SFBENCH_RVV_SOURCES "")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag("-march=rv64gcv" COMPILER_SUPPORTS_RV64GCV)
+        if(COMPILER_SUPPORTS_RV64GCV)
+            set(SFBENCH_RVV_SOURCES src/kernels/kernel_rvv.cpp)
+            add_compile_definitions(SFBENCH_RVV_SYMBOLS=1)
+            message(STATUS "RISC-V: RVV kernels enabled (-march=rv64gcv)")
+        else()
+            message(STATUS "RISC-V: -march=rv64gcv unavailable, scalar kernels only")
+        endif()
+    endif()
+endif()
+
 # Source files
 set(BENCHMARK_SOURCES
     src/main.cpp
@@ -115,10 +132,16 @@ set(KERNEL_SOURCES
     src/kernels/kernel_compute.cpp
     src/kernels/kernel_compute_avx512.cpp
 )
+list(APPEND KERNEL_SOURCES ${SFBENCH_RVV_SOURCES})
 
 # Main executable
 add_executable(cpu_benchmark ${BENCHMARK_SOURCES} ${KERNEL_SOURCES})
 target_include_directories(cpu_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/kernels)
+
+# RVV kernels need V-extension codegen in their own TU
+if(SFBENCH_RVV_SOURCES)
+    set_source_files_properties(src/kernels/kernel_rvv.cpp PROPERTIES COMPILE_FLAGS "-march=rv64gcv -O3")
+endif()
 
 # Set per-file compile flags for SIMD kernels
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i686|x86")
@@ -230,6 +253,7 @@ if(BUILD_TESTS)
         src/kernels/kernel_compute.cpp
         src/kernels/kernel_compute_avx512.cpp
     )
+    list(APPEND LIB_SOURCES ${SFBENCH_RVV_SOURCES})
 
     if(WIN32)
         # LIB_SOURCES includes platform/result-submission/server-performance code.
