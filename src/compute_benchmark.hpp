@@ -185,6 +185,8 @@ public:
         // Architecture detection
 #if defined(__aarch64__) || defined(_M_ARM64)
         results.arch = "arm64";
+#elif defined(__riscv)
+        results.arch = "riscv64";
 #else
         results.arch = "x86_64";
 #endif

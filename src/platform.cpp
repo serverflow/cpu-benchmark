@@ -50,6 +50,10 @@ std::string get_arch_string() {
     return "x86";
 #elif defined(__arm__) || defined(_M_ARM)
     return "arm";
+#elif defined(__riscv) && defined(__riscv_xlen) && __riscv_xlen == 32
+    return "riscv32";
+#elif defined(__riscv)
+    return "riscv64";
 #else
     return "unknown";
 #endif
