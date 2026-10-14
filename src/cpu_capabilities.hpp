@@ -20,6 +20,9 @@
             #include <asm/hwcap.h>
         #endif
     #endif
+    #if defined(__riscv) && defined(__linux__)
+        #include <sys/auxv.h>
+    #endif
 #endif
 
 // SIMD Level enum 
@@ -31,7 +34,8 @@ enum class SimdLevel {
     AVX2 = 4,
     AVX512 = 5,
     NEON = 10,
-    NEON_FP16 = 11
+    NEON_FP16 = 11,
+    RVV = 20
 };
 
 // Convert SimdLevel to string
@@ -45,6 +49,7 @@ inline std::string simd_level_to_string(SimdLevel level) {
         case SimdLevel::AVX512: return "AVX-512";
         case SimdLevel::NEON: return "ARM NEON";
         case SimdLevel::NEON_FP16: return "ARM NEON FP16";
+        case SimdLevel::RVV: return "RISC-V RVV";
     }
     return "Unknown";
 }
@@ -65,9 +70,12 @@ struct CpuCapabilities {
     bool has_avx512_fp16;       // AVX-512 FP16 support (x86-64)
     bool has_avx512_vnni;       // AVX-512 VNNI support
     
-    // ARM64 SIMD 
+    // ARM64 SIMD
     bool has_arm_neon;
     bool has_arm_neon_fp16;     // ARM NEON FP16 support (ARM64)
+
+    // RISC-V
+    bool has_riscv_vector;      // RVV 1.0 (runtime-detected via AT_HWCAP)
     
     // Derived flags
     bool fp16_native_available; // Any native FP16 support available
@@ -340,6 +348,20 @@ inline bool detect_arm_neon_fp16() {
 #endif
 }
 
+// Detect RISC-V Vector Extension support
+inline bool detect_riscv_vector() {
+#if defined(__riscv) && defined(__linux__)
+    // Linux exposes ISA letters in AT_HWCAP as bit (uppercase letter - 'A');
+    // bit 'V' (21) is only set when the kernel saves/restores V state.
+    return (getauxval(AT_HWCAP) & (1UL << ('V' - 'A'))) != 0;
+#elif defined(__riscv)
+    // Non-Linux riscv64: no portable runtime detection available
+    return false;
+#else
+    return false;
+#endif
+}
+
 // CpuCapabilities implementation
 inline CpuCapabilities CpuCapabilities::detect() {
     CpuCapabilities caps;
@@ -353,10 +375,13 @@ inline CpuCapabilities CpuCapabilities::detect() {
     caps.has_avx512_fp16 = detect_avx512_fp16();
     caps.has_avx512_vnni = detect_avx512_vnni();
     
-    // ARM64 SIMD detection 
+    // ARM64 SIMD detection
     caps.has_arm_neon = detect_arm_neon();
     caps.has_arm_neon_fp16 = detect_arm_neon_fp16();
-    
+
+    // RISC-V detection
+    caps.has_riscv_vector = detect_riscv_vector();
+
     // Derived flags
     caps.fp16_native_available = caps.has_avx512_fp16 || caps.has_arm_neon_fp16;
     
@@ -373,6 +398,7 @@ inline CpuCapabilities::CpuCapabilities()
     , has_avx512_vnni(false)
     , has_arm_neon(false)
     , has_arm_neon_fp16(false)
+    , has_riscv_vector(false)
     , fp16_native_available(false) {
 }
 
@@ -397,6 +423,10 @@ inline SimdLevel CpuCapabilities::get_simd_level() const {
     if (has_arm_neon_fp16) return SimdLevel::NEON_FP16;
     if (has_arm_neon) return SimdLevel::NEON;
     return SimdLevel::Scalar;
+#elif defined(__riscv)
+    // RISC-V: RVV > Scalar
+    if (has_riscv_vector) return SimdLevel::RVV;
+    return SimdLevel::Scalar;
 #else
     return SimdLevel::Scalar;
 #endif
@@ -419,6 +449,10 @@ inline std::string CpuCapabilities::to_string() const {
 #if defined(__aarch64__) || defined(_M_ARM64)
     result += "  ARM NEON:    " + std::string(has_arm_neon ? "Yes" : "No") + "\n";
     result += "  NEON FP16:   " + std::string(has_arm_neon_fp16 ? "Yes" : "No") + "\n";
+#endif
+
+#if defined(__riscv)
+    result += "  RISC-V V:    " + std::string(has_riscv_vector ? "Yes" : "No") + "\n";
 #endif
 
     result += "  Active Level: " + simd_level_to_string(get_simd_level()) + "\n";
@@ -489,6 +523,13 @@ inline std::string get_cpu_instructions_string() {
     if (caps.has_arm_neon_fp16) {
         if (!result.empty()) result += ",";
         result += "NEON_FP16";
+    }
+#endif
+
+#if defined(__riscv)
+    if (caps.has_riscv_vector) {
+        if (!result.empty()) result += ",";
+        result += "RVV";
     }
 #endif
 
