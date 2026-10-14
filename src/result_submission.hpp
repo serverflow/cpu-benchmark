@@ -4,6 +4,7 @@
 
 #include "types.hpp"
 #include "platform.hpp"
+#include "server_performance.hpp"
 #include <string>
 
 // Result of submission attempt
@@ -14,14 +15,7 @@ struct SubmissionResult {
 };
 
 // CPU frequency data collected during benchmark
-struct FrequencyData {
-    double min_mhz;             // Minimum observed frequency
-    double max_mhz;             // Maximum observed frequency
-    double avg_mhz;             // Average frequency during test
-    bool available;             // True if frequency data was collected
-    
-    FrequencyData() : min_mhz(0), max_mhz(0), avg_mhz(0), available(false) {}
-};
+using FrequencyData = FrequencyStats;
 
 // Compute benchmark data for submission
 struct ComputeSubmissionData {
@@ -40,6 +34,9 @@ struct ComputeSubmissionData {
     
     // Frequency data during test
     FrequencyData frequency;
+    FrequencyData st_frequency;
+    FrequencyData mt_frequency;
+    WindowsPowerDiagnostics windows_power;
     
     // Socket info
     int socket_count;
@@ -177,8 +174,13 @@ bool submit_full_benchmark_results_interactive(
 namespace result_submission {
 
 // Build JSON payload from benchmark data (with optional nickname and mode override)
-std::string build_payload(const BenchmarkResult& result, const Config& config, const CpuInfo& cpu_info, 
+std::string build_payload(const BenchmarkResult& result, const Config& config, const CpuInfo& cpu_info,
                           const std::string& nickname = "Anonymous", const std::string& mode_override = "");
+
+std::string build_compute_payload(const ComputeSubmissionData& data, const Config& config,
+                                  const CpuInfo& cpu_info, const std::string& nickname);
+std::string build_full_benchmark_payload(const FullBenchmarkSubmissionData& data, const Config& config,
+                                        const CpuInfo& cpu_info, const std::string& nickname);
 
 // Generate hardware fingerprint from CPU characteristics
 std::string generate_hardware_fingerprint(const CpuInfo& cpu_info);

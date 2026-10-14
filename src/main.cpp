@@ -370,12 +370,10 @@ int main(int argc, char* argv[]) {
                 compute_data.session_id = session_id;
                 
                 // Store frequency data
-                if (compute_results.frequency.available) {
-                    compute_data.frequency.min_mhz = compute_results.frequency.min_mhz;
-                    compute_data.frequency.max_mhz = compute_results.frequency.max_mhz;
-                    compute_data.frequency.avg_mhz = compute_results.frequency.avg_mhz;
-                    compute_data.frequency.available = true;
-                }
+                compute_data.frequency = compute_results.frequency;
+                compute_data.st_frequency = compute_results.st_frequency;
+                compute_data.mt_frequency = compute_results.mt_frequency;
+                compute_data.windows_power = compute_results.windows_power;
             }
             
             // 3. Precision test (--precision=all)
@@ -706,12 +704,10 @@ int main(int argc, char* argv[]) {
                     compute_data.os_version = get_os_version();
                     
                     // Add frequency data
-                    if (compute_results.frequency.available) {
-                        compute_data.frequency.min_mhz = compute_results.frequency.min_mhz;
-                        compute_data.frequency.max_mhz = compute_results.frequency.max_mhz;
-                        compute_data.frequency.avg_mhz = compute_results.frequency.avg_mhz;
-                        compute_data.frequency.available = true;
-                    }
+                    compute_data.frequency = compute_results.frequency;
+                    compute_data.st_frequency = compute_results.st_frequency;
+                    compute_data.mt_frequency = compute_results.mt_frequency;
+                    compute_data.windows_power = compute_results.windows_power;
                     
                     submit_compute_results_interactive(compute_data, config, cpu_info);
                 } else {

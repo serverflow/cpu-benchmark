@@ -1,0 +1,41 @@
+{
+  "checked_at": "2026-10-05T15:54:23.9967362+03:00",
+  "cpu": "AMD Ryzen 7 8700F 8-Core Processor",
+  "os": "Windows 10 Pro 22H2 (19045)",
+  "build": "MSVC 19.50; Release; portable x64; static runtime; OpenMP OFF; runtime SIMD dispatch",
+  "base_commit": "6713a12b92e22cdf9a13b162dcf29f000b9efa1e",
+  "sha256": "97F718A081B624A26C6F6ABB9B628C7A41F74FBA65EA47C13B5F8523F7559C87",
+  "command": "SFBench-beta-0.48-windows-x64-frequency-fix.exe --mode=compute --output=json",
+  "environment": {"SFBENCH_NO_SIMD": "1"},
+  "power_plan_unchanged": true,
+  "server_performance_enabled": false,
+  "selected_st_core": 0,
+  "test_duration_sec": 10,
+  "warmup_seconds": 3,
+  "frequency": {
+    "available": true, "estimated": true, "source": "windows_pdh_processor_performance",
+    "min_mhz": 4796.98, "max_mhz": 5033.14, "avg_mhz": 4905.03, "sample_count": 18
+  },
+  "st_frequency": {
+    "available": true, "estimated": true, "source": "windows_pdh_processor_performance",
+    "logical_cpu": 0, "min_mhz": 4993.69, "max_mhz": 5033.14, "avg_mhz": 5013, "sample_count": 9
+  },
+  "mt_frequency": {
+    "available": true, "estimated": true, "source": "windows_pdh_processor_performance",
+    "logical_cpu": -1, "min_mhz": 4796.98, "max_mhz": 4797.57, "avg_mhz": 4797.06, "sample_count": 9
+  },
+  "windows_power": {
+    "checked": true, "power_source": "AC", "boost_mode": 2,
+    "max_processor_state_percent": 100, "frequency_limit_mhz": 0
+  },
+  "scores": {"single": 1869, "multi": 15152, "overall": 11167},
+  "regression_checks": {
+    "standalone_ctest": "passed",
+    "strict_local_and_submission_json": "3/3 passed",
+    "no_frequency_and_no_affinity_smoke_test": "passed",
+    "full_compute_with_simd_and_text_output": "passed on preceding dynamic-runtime build",
+    "submitted_to_server": false,
+    "windows_11_hardware_tested": false,
+    "windows_server_hardware_tested": false
+  }
+}

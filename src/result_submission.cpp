@@ -642,7 +642,7 @@ bool submit_results_interactive(
 }
 
 // Build JSON payload for compute benchmark results
-static std::string build_compute_payload(const ComputeSubmissionData& compute_data, const Config& config, 
+std::string result_submission::build_compute_payload(const ComputeSubmissionData& compute_data, const Config& config,
                                          const CpuInfo& cpu_info, const std::string& nickname) {
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(9);
@@ -699,13 +699,11 @@ static std::string build_compute_payload(const ComputeSubmissionData& compute_da
     oss << "\"simd_level\":\"" << json_escape(compute_data.simd_level) << "\"";
     // Frequency data inside results section
     if (compute_data.frequency.available) {
-        oss << ",\"frequency\":{";
-        oss << "\"min_mhz\":" << compute_data.frequency.min_mhz << ",";
-        oss << "\"max_mhz\":" << compute_data.frequency.max_mhz << ",";
-        oss << "\"avg_mhz\":" << compute_data.frequency.avg_mhz << ",";
-        oss << "\"available\":true";
-        oss << "}";
+        oss << ",\"frequency\":" << frequency_stats_json(compute_data.frequency);
     }
+    oss << ",\"st_frequency\":" << frequency_stats_json(compute_data.st_frequency);
+    oss << ",\"mt_frequency\":" << frequency_stats_json(compute_data.mt_frequency);
+    oss << ",\"windows_power\":" << windows_power_json(compute_data.windows_power);
     oss << "},";
     
     // CPU section
@@ -798,7 +796,7 @@ bool submit_compute_results_interactive(
     std::cout << "Submitting compute results as \"" << nickname << "\"..." << std::flush;
     
     // Build payload with compute-specific data
-    std::string payload = build_compute_payload(compute_data, config, cpu_info, nickname);
+    std::string payload = result_submission::build_compute_payload(compute_data, config, cpu_info, nickname);
     
     // Submit to server
     SubmissionResult submission = http_post(server_url, payload);
@@ -824,7 +822,7 @@ bool submit_compute_results(
     const std::string& server_url)
 {
     // Build payload with compute-specific data
-    std::string payload = build_compute_payload(compute_data, config, cpu_info, nickname);
+    std::string payload = result_submission::build_compute_payload(compute_data, config, cpu_info, nickname);
     
     // Submit to server
     SubmissionResult submission = http_post(server_url, payload);
@@ -1022,7 +1020,7 @@ bool submit_precision_all_results(
 
 
 // Build JSON payload for full benchmark suite results
-static std::string build_full_benchmark_payload(const FullBenchmarkSubmissionData& full_data, const Config& config, 
+std::string result_submission::build_full_benchmark_payload(const FullBenchmarkSubmissionData& full_data, const Config& config,
                                                 const CpuInfo& cpu_info, const std::string& nickname) {
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(9);
@@ -1080,6 +1078,11 @@ static std::string build_full_benchmark_payload(const FullBenchmarkSubmissionDat
     oss << "\"mt_threads\":" << full_data.compute.mt_threads << ",";
     oss << "\"overall_score\":" << full_data.compute.overall_score << ",";
     oss << "\"simd_level\":\"" << json_escape(full_data.compute.simd_level) << "\"";
+    if (full_data.compute.frequency.available)
+        oss << ",\"frequency\":" << frequency_stats_json(full_data.compute.frequency);
+    oss << ",\"st_frequency\":" << frequency_stats_json(full_data.compute.st_frequency);
+    oss << ",\"mt_frequency\":" << frequency_stats_json(full_data.compute.mt_frequency);
+    oss << ",\"windows_power\":" << windows_power_json(full_data.compute.windows_power);
     oss << "},";
     
     // Precision results
@@ -1216,7 +1219,7 @@ bool submit_full_benchmark_results_interactive(
     std::cout << "Submitting full benchmark results as \"" << nickname << "\"..." << std::flush;
     
     // Build payload with all test results
-    std::string payload = build_full_benchmark_payload(full_data, config, cpu_info, nickname);
+    std::string payload = result_submission::build_full_benchmark_payload(full_data, config, cpu_info, nickname);
     
     // Submit to server (use /api/submit_full endpoint)
     std::string full_url = server_url;

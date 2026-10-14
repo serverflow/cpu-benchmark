@@ -11,6 +11,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 # Options
 option(ENABLE_OPENMP "Enable OpenMP support" OFF)
 option(BUILD_TESTS "Build tests" ON)
+option(BUILD_TELEMETRY_TESTS "Build standalone frequency/power regression tests (no external dependencies)" OFF)
 option(ENABLE_NATIVE_ARCH "Enable native CPU optimizations (-march=native)" ON)
 option(BUILD_PORTABLE "Build portable binary with runtime SIMD dispatch" OFF)
 option(USE_RELEASE_BUILD_CONFIG "Include release build configuration module" OFF)
@@ -185,7 +186,7 @@ endif()
 if(WIN32)
     # Windows threading and WinSock for result submission
     # - advapi32: registry access (RegOpenKeyEx, ...)
-    # - pdh: real-time CPU frequency sampling (Processor Frequency counter)
+    # - pdh: effective-clock estimation (% Processor Performance / busy time)
     # - powrprof: temporary High Performance power scheme on Windows Server
     target_link_libraries(cpu_benchmark PRIVATE ws2_32 advapi32 pdh powrprof)
 else()
@@ -194,6 +195,19 @@ else()
 endif()
 
 # Tests with RapidCheck
+if(BUILD_TELEMETRY_TESTS)
+    enable_testing()
+    add_executable(test_frequency_telemetry tests/test_frequency_telemetry.cpp
+        src/platform.cpp src/server_performance.cpp src/result_submission.cpp)
+    target_include_directories(test_frequency_telemetry PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(WIN32)
+        target_link_libraries(test_frequency_telemetry PRIVATE ws2_32 advapi32 pdh powrprof)
+    else()
+        target_link_libraries(test_frequency_telemetry PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME frequency_telemetry COMMAND test_frequency_telemetry)
+endif()
+
 if(BUILD_TESTS)
     include(FetchContent)
     

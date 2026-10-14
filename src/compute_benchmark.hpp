@@ -90,6 +90,9 @@ struct ComputeBenchmarkResults {
     
     // CPU frequency during test
     FrequencyStats frequency;
+    FrequencyStats st_frequency;
+    FrequencyStats mt_frequency;
+    WindowsPowerDiagnostics windows_power;
 
     // Windows Server performance controls used for this run.
     bool server_performance_mode = false;
@@ -156,6 +159,7 @@ public:
         results.high_qos = performance_status.high_qos;
         results.high_priority = performance_status.high_priority || high_priority_;
         results.performance_warning = performance_status.warning;
+        results.windows_power = performance_status.power;
 
 #ifdef _WIN32
         // On multi-socket / multi-group systems, background frequency sampling and ST pinning
@@ -217,9 +221,6 @@ public:
             }
         }
 
-        // Initialize frequency sampler
-        FrequencySampler freq_sampler;
-        
         // Select the fastest eligible core after applying the server power policy.
         // This avoids hard-coding CPU 0 on homogeneous workstation/server CPUs.
         select_best_st_core(allow_st_affinity);
@@ -246,15 +247,28 @@ public:
         }
         compute_debug_log("[compute] warmup done");
         
-        // Start background frequency sampling (every 50ms during tests)
+        // Track the pinned ST processor rather than an idle-weighted package average.
+        pin_st_thread(allow_st_affinity);
+        results.selected_st_core = actual_st_core_;
+        FrequencySampler st_sampler(actual_st_core_);
+        FrequencySampler mt_sampler;
+#ifdef _WIN32
+        constexpr unsigned frequency_interval_ms = 1000; // PDH rate-counter interval
+#else
+        constexpr unsigned frequency_interval_ms = 50;
+#endif
         if (!skip_freq) {
             compute_debug_log("[compute] freq sampler start");
-            freq_sampler.start_background(50);
+            st_sampler.start_background(frequency_interval_ms);
         }
         
         // Phase 2: Single-thread scalar FP64 test (THE baseline)
         compute_debug_log("[compute] ST scalar start");
         results.single_thread = run_scalar_fp64_test(1, test_seconds, true, allow_st_affinity);
+        if (!skip_freq) {
+            st_sampler.stop_background();
+            results.st_frequency = st_sampler.get_stats();
+        }
         compute_debug_log("[compute] ST scalar done");
         
         if (mt_warmup > 0.0) {
@@ -264,8 +278,13 @@ public:
         }
 
         // Phase 3: Multi-thread scalar FP64 test
+        if (!skip_freq) mt_sampler.start_background(frequency_interval_ms);
         compute_debug_log("[compute] MT scalar start");
         results.multi_thread = run_scalar_fp64_test(num_threads_, test_seconds, false, allow_worker_affinity);
+        if (!skip_freq) {
+            mt_sampler.stop_background();
+            results.mt_frequency = mt_sampler.get_stats();
+        }
         compute_debug_log("[compute] MT scalar done");
         
         // Phase 4: SIMD tests (informational only)
@@ -282,18 +301,8 @@ public:
             compute_debug_log("[compute] SIMD tests skipped");
         }
         
-        // Stop background sampling and get results
-        if (!skip_freq) {
-            compute_debug_log("[compute] freq sampler stop");
-            freq_sampler.stop_background();
-        }
-        
-        // Store frequency statistics
-        if (!skip_freq) {
-            results.frequency = freq_sampler.get_stats();
-        } else {
-            results.frequency = FrequencyStats{};
-        }
+        // Compatibility summary excludes warmup and informational SIMD phases.
+        results.frequency = merge_frequency_stats(results.st_frequency, results.mt_frequency);
         
         // Calculate derived metrics (from scalar FP64 only)
         if (results.single_thread.gflops > 0) {
@@ -461,7 +470,30 @@ public:
             std::snprintf(freq_buf, sizeof(freq_buf), "%.0f - %.0f MHz (avg: %.0f, %u samples)",
                 results.frequency.min_mhz, results.frequency.max_mhz, 
                 results.frequency.avg_mhz, results.frequency.sample_count);
-            print_summary("CPU Frequency:", freq_buf);
+            print_summary(results.frequency.estimated ? "CPU Freq (estimated):" : "CPU Frequency:", freq_buf);
+        }
+        auto print_phase_frequency = [&](const char* phase, const FrequencyStats& stats) {
+            if (!stats.available) {
+                print_full(std::string(" ") + phase + " frequency: unavailable");
+                return;
+            }
+            char buffer[180];
+            std::snprintf(buffer, sizeof(buffer), " %.0f - %.0f MHz (avg: %.0f)",
+                          stats.min_mhz, stats.max_mhz, stats.avg_mhz);
+            print_summary(std::string(phase) + (stats.estimated ? " Freq (estimated):" : " Frequency:"), buffer);
+        };
+        print_phase_frequency("Single", results.st_frequency);
+        print_phase_frequency("Multi", results.mt_frequency);
+        if (results.windows_power.checked) {
+            print_summary("Windows power source:", results.windows_power.power_source);
+            print_summary("CPU boost mode:", results.windows_power.boost_mode < 0 ? "unknown" :
+                results.windows_power.boost_mode == 0 ? "disabled" :
+                "allowed (mode " + std::to_string(results.windows_power.boost_mode) + ")");
+            print_summary("Maximum CPU state:", results.windows_power.max_processor_state_percent < 0 ? "unknown" :
+                std::to_string(results.windows_power.max_processor_state_percent) + "%");
+            print_summary("Power-plan freq cap:", results.windows_power.frequency_limit_mhz < 0 ? "unknown" :
+                results.windows_power.frequency_limit_mhz == 0 ? "uncapped" :
+                std::to_string(results.windows_power.frequency_limit_mhz) + " MHz");
         }
         
         oss << line('=');
@@ -501,7 +533,11 @@ public:
         oss << "    \"selected_st_core\": " << results.selected_st_core << ",\n";
         oss << "    \"warning\": \"" << results.performance_warning << "\"\n";
         oss << "  },\n";
-        
+        oss << "  \"frequency\": " << frequency_stats_json(results.frequency) << ",\n";
+        oss << "  \"st_frequency\": " << frequency_stats_json(results.st_frequency) << ",\n";
+        oss << "  \"mt_frequency\": " << frequency_stats_json(results.mt_frequency) << ",\n";
+        oss << "  \"windows_power\": " << windows_power_json(results.windows_power) << ",\n";
+
         // Baseline results
         oss << "  \"baseline\": {\n";
         oss << "    \"type\": \"scalar_fp64\",\n";
@@ -547,6 +583,7 @@ private:
     int selected_socket_;
     bool server_performance_active_;
     int best_st_core_;
+    int actual_st_core_ = -1;
     std::vector<unsigned> socket_cores_;  // Core IDs for selected socket
 
 
@@ -729,6 +766,7 @@ static std::vector<unsigned> get_preferred_core_order() {
     }
 
     void pin_st_thread(bool allow_affinity) {
+        actual_st_core_ = -1;
         if (!allow_affinity || !ThreadAffinityManager::is_affinity_supported()) {
             return;
         }
@@ -739,6 +777,7 @@ static std::vector<unsigned> get_preferred_core_order() {
                 static_cast<unsigned>(best_st_core_)) == AffinityResult::Success) {
             compute_debug_log("[compute][st] pin done, calibrated core=" +
                               std::to_string(best_st_core_));
+            actual_st_core_ = best_st_core_;
             return;
         }
 
@@ -749,12 +788,14 @@ static std::vector<unsigned> get_preferred_core_order() {
         for (unsigned c : candidates) {
             if (ThreadAffinityManager::pin_current_thread(c) == AffinityResult::Success) {
                 pinned = true;
+                actual_st_core_ = static_cast<int>(c);
                 break;
             }
         }
         if (!pinned) {
             // Best-effort fallback
-            ThreadAffinityManager::pin_current_thread(fallback);
+            if (ThreadAffinityManager::pin_current_thread(fallback) == AffinityResult::Success)
+                actual_st_core_ = static_cast<int>(fallback);
         }
         compute_debug_log("[compute][st] pin done");
     }

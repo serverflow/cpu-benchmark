@@ -15,6 +15,41 @@ constexpr GUID kHighPerformanceScheme = {
     {0x9a, 0x85, 0xa6, 0xe2, 0x3a, 0x8c, 0x63, 0x5c}
 };
 
+constexpr GUID kProcessorSubgroup = {0x54533251, 0x82be, 0x4824, {0x96,0xc1,0x47,0xb6,0x0b,0x74,0x0d,0x00}};
+constexpr GUID kBoostMode = {0xbe337238, 0x0d82, 0x4146, {0xa9,0x60,0x4f,0x37,0x49,0xd4,0x70,0xc7}};
+constexpr GUID kMaxState = {0xbc5038f7, 0x23e0, 0x4960, {0x96,0xda,0x33,0xab,0xaf,0x59,0x35,0xec}};
+constexpr GUID kFrequencyLimit = {0x75b0ae3f, 0xbce0, 0x45a7, {0x8c,0x89,0xc9,0x61,0x1c,0x25,0xe1,0x00}};
+
+void check_power_policy(ServerPerformanceStatus& status) {
+    auto& power = status.power;
+    power.checked = true;
+    SYSTEM_POWER_STATUS supply{};
+    if (!GetSystemPowerStatus(&supply) || supply.ACLineStatus == 255) return;
+    const bool ac = supply.ACLineStatus == 1;
+    power.power_source = ac ? "AC" : "DC";
+    GUID* scheme = nullptr;
+    if (PowerGetActiveScheme(nullptr, &scheme) != ERROR_SUCCESS || !scheme) {
+        if (scheme) LocalFree(scheme);
+        return;
+    }
+    auto read = [&](const GUID& setting) {
+        DWORD value = 0;
+        const DWORD error = ac
+            ? PowerReadACValueIndex(nullptr, scheme, &kProcessorSubgroup, &setting, &value)
+            : PowerReadDCValueIndex(nullptr, scheme, &kProcessorSubgroup, &setting, &value);
+        return error == ERROR_SUCCESS ? static_cast<int>(value) : -1;
+    };
+    power.boost_mode = read(kBoostMode);
+    power.max_processor_state_percent = read(kMaxState);
+    power.frequency_limit_mhz = read(kFrequencyLimit);
+    LocalFree(scheme);
+    const std::string warning = windows_power_warning(power);
+    if (!warning.empty()) {
+        if (!status.warning.empty()) status.warning += "; ";
+        status.warning += warning;
+    }
+}
+
 void append_warning(std::string& warning, const char* operation, DWORD error) {
     if (!warning.empty()) warning += "; ";
     warning += operation;
@@ -77,7 +112,10 @@ bool configure_current_thread_for_performance() {
 ScopedServerPerformance::ScopedServerPerformance(bool enable) {
     status_.server_os = is_windows_server_os();
     status_.requested = enable && status_.server_os;
-    if (!status_.requested) return;
+    if (!status_.requested) {
+        check_power_policy(status_); // Workstation Windows and disabled server tuning too.
+        return;
+    }
 
     impl_ = std::make_unique<Impl>();
     status_.active = true;
@@ -151,6 +189,7 @@ ScopedServerPerformance::ScopedServerPerformance(bool enable) {
         append_warning(status_.warning, "SetThreadInformation(HighQoS)", GetLastError());
     }
     status_.high_qos = process_qos_ok && thread_qos_ok;
+    check_power_policy(status_); // Read the policy actually used for the test.
 }
 
 ScopedServerPerformance::~ScopedServerPerformance() {

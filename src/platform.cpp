@@ -6,6 +6,8 @@
 #include <cstring>
 #include <set>
 #include <algorithm>
+#include <map>
+#include <cmath>
 
 // Platform-specific includes
 #ifdef _WIN32
@@ -393,23 +395,34 @@ static bool query_power_information_mhz(ULONG& out_current_mhz, ULONG& out_max_m
     return false;
 }
 
-// Query real-time CPU frequency (MHz) via PDH counter "Processor Frequency".
-// This is the most reliable approach on modern Windows and reflects turbo/boost.
-static double query_pdh_frequency_mhz() {
+// Processor Frequency alone can remain at nominal MHz on autonomous P-state CPUs.
+// Estimate active-clock MHz from nominal registry MHz and % Processor Performance.
+// Aggregate busy-time-weighted per-CPU estimates so idle cores and hybrid CPUs with
+// different nominal clocks do not distort the package estimate.
+// Never cap the performance percentage at 100: turbo routinely exceeds it.
+static double query_pdh_frequency_mhz(int logical_cpu = -1) {
+    struct CpuCounters {
+        PDH_HCOUNTER performance = nullptr;
+        PDH_HCOUNTER busy = nullptr;
+        double nominal_mhz = 0.0;
+    };
     struct PdhState {
         PDH_HQUERY query = nullptr;
-        PDH_HCOUNTER counter = nullptr;
+        std::vector<CpuCounters> cpus;
+        bool initialized = false;
         bool ok = false;
-        std::mutex mtx;
+        ~PdhState() { if (query) PdhCloseQuery(query); }
     };
 
-    static PdhState state;
-    static std::once_flag init_flag;
+    static std::map<int, PdhState> states;
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    PdhState& state = states[logical_cpu];
 
-    std::call_once(init_flag, []() {
+    if (!state.initialized) {
+        state.initialized = true;
         if (PdhOpenQueryA(nullptr, 0, &state.query) != ERROR_SUCCESS) {
-            state.ok = false;
-            return;
+            return 0.0;
         }
 
         // Prefer English counter path (works on non-English Windows).
@@ -423,47 +436,66 @@ static double query_pdh_frequency_mhz() {
             }
         }
 
-        const char* paths[] = {
-            "\\Processor Information(_Total)\\Processor Frequency",
-            "\\Processor(_Total)\\Processor Frequency"
+        // Retain the existing multi-group safety guard (global ID mapping is ambiguous).
+        const unsigned count = get_active_processor_count_all_groups();
+        if (count > 64 || GetActiveProcessorGroupCount() > 1
+            || (logical_cpu >= 0 && static_cast<unsigned>(logical_cpu) >= count)) return 0.0;
+        auto add_counter = [&](const std::string& path, PDH_HCOUNTER* counter) {
+            return pAddEnglish ? pAddEnglish(state.query, path.c_str(), 0, counter)
+                : PdhAddCounterA(state.query, path.c_str(), 0, counter);
         };
-
-        PDH_STATUS st = PDH_CSTATUS_NO_OBJECT;
-        for (const char* path : paths) {
-            if (pAddEnglish) {
-                st = pAddEnglish(state.query, path, 0, &state.counter);
-            } else {
-                st = PdhAddCounterA(state.query, path, 0, &state.counter);
-            }
-            if (st == ERROR_SUCCESS) {
-                state.ok = true;
-                // Prime the query.
-                PdhCollectQueryData(state.query);
-                return;
-            }
+        const unsigned begin = logical_cpu < 0 ? 0 : static_cast<unsigned>(logical_cpu);
+        const unsigned end = logical_cpu < 0 ? count : begin + 1;
+        for (unsigned cpu = begin; cpu < end; ++cpu) {
+            HKEY key = nullptr;
+            DWORD mhz = 0, size = sizeof(mhz), type = 0;
+            const std::string registry_path = "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\" + std::to_string(cpu);
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, registry_path.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS)
+                continue;
+            const LONG error = RegQueryValueExA(key, "~MHz", nullptr, &type,
+                                               reinterpret_cast<LPBYTE>(&mhz), &size);
+            RegCloseKey(key);
+            if (error != ERROR_SUCCESS || type != REG_DWORD || size != sizeof(mhz) || mhz == 0) continue;
+            CpuCounters counters;
+            counters.nominal_mhz = static_cast<double>(mhz);
+            const std::string prefix = "\\Processor Information(0," + std::to_string(cpu) + ")\\";
+            if (add_counter(prefix + "% Processor Performance", &counters.performance) != ERROR_SUCCESS)
+                continue;
+            if (logical_cpu < 0 && add_counter(prefix + "% Processor Time", &counters.busy) != ERROR_SUCCESS)
+                continue;
+            state.cpus.push_back(counters);
         }
+        state.ok = !state.cpus.empty();
+        if (state.ok) PdhCollectQueryData(state.query);
+        return 0.0; // Rate counters need a second, spaced collection.
+    }
 
-        state.ok = false;
-    });
-
-    if (!state.ok || !state.query || !state.counter) {
+    if (!state.ok || !state.query) {
         return 0.0;
     }
 
-    std::lock_guard<std::mutex> lock(state.mtx);
     if (PdhCollectQueryData(state.query) != ERROR_SUCCESS) {
         return 0.0;
     }
 
-    PDH_FMT_COUNTERVALUE value;
-    DWORD type = 0;
-    if (PdhGetFormattedCounterValue(state.counter, PDH_FMT_DOUBLE, &type, &value) != ERROR_SUCCESS) {
-        return 0.0;
+    auto read_counter = [](PDH_HCOUNTER counter) {
+        PDH_FMT_COUNTERVALUE value{};
+        if (PdhGetFormattedCounterValue(counter, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100,
+                                       nullptr, &value) != ERROR_SUCCESS
+            || (value.CStatus != PDH_CSTATUS_VALID_DATA && value.CStatus != PDH_CSTATUS_NEW_DATA)
+            || !std::isfinite(value.doubleValue) || value.doubleValue <= 0.0) return 0.0;
+        return value.doubleValue;
+    };
+    double weighted_mhz = 0.0, total_weight = 0.0;
+    for (const CpuCounters& cpu : state.cpus) {
+        const double mhz = estimate_effective_frequency_mhz(cpu.nominal_mhz, read_counter(cpu.performance));
+        const double weight = logical_cpu >= 0 ? 1.0 : read_counter(cpu.busy);
+        if (mhz > 0.0 && weight > 0.0) {
+            weighted_mhz += mhz * weight;
+            total_weight += weight;
+        }
     }
-    if (value.CStatus != ERROR_SUCCESS) {
-        return 0.0;
-    }
-    return (value.doubleValue > 0.0) ? value.doubleValue : 0.0;
+    return total_weight > 0.0 ? weighted_mhz / total_weight : 0.0;
 }
 
 } // namespace
@@ -490,11 +522,10 @@ CpuFrequencyInfo get_cpu_frequency() {
         RegCloseKey(hKey);
     }
 
-    // Try to get max/current via power information (more accurate than registry)
+    // Maximum requested P-state metadata (not a guaranteed turbo ceiling).
     ULONG cur = 0, mx = 0;
     if (query_power_information_mhz(cur, mx)) {
         if (mx > 0) info.max_mhz = static_cast<double>(mx);
-        if (cur > 0) info.current_mhz = static_cast<double>(cur);
     }
 
     // Always try PDH for a real-time current frequency
@@ -507,8 +538,7 @@ CpuFrequencyInfo get_cpu_frequency() {
         }
     }
 
-    // Final fallback for current/max
-    if (info.current_mhz <= 0.0) info.current_mhz = info.base_mhz;
+    // Nominal MHz is metadata, not a substitute for an unavailable live measurement.
     if (info.max_mhz <= 0.0) info.max_mhz = info.base_mhz;
 
     info.available = (info.base_mhz > 0.0 || info.current_mhz > 0.0 || info.max_mhz > 0.0);
@@ -642,36 +672,10 @@ CpuFrequencyInfo get_cpu_frequency() {
     return info;
 }
 
-double sample_current_frequency() {
+double sample_current_frequency(int logical_cpu) {
 #ifdef _WIN32
-    // Windows: Prefer PDH "Processor Frequency" (real-time, reflects turbo)
-    double pdh_freq = query_pdh_frequency_mhz();
-    if (pdh_freq > 0.0) {
-        return pdh_freq;
-    }
-
-    // Fallback: CallNtPowerInformation (may fail on some configurations)
-    ULONG cur = 0, mx = 0;
-    if (query_power_information_mhz(cur, mx) && cur > 0) {
-        return static_cast<double>(cur);
-    }
-    
-    // Fallback to registry (base frequency only)
-    HKEY hKey;
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                      "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
-                      0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        DWORD mhz = 0;
-        DWORD size = sizeof(mhz);
-        
-        if (RegQueryValueExA(hKey, "~MHz", nullptr, nullptr,
-                            reinterpret_cast<LPBYTE>(&mhz), &size) == ERROR_SUCCESS) {
-            RegCloseKey(hKey);
-            return static_cast<double>(mhz);
-        }
-        RegCloseKey(hKey);
-    }
-    return 0.0;
+    // No static CurrentMhz/~MHz fallback: that falsely reports a locked base clock.
+    return query_pdh_frequency_mhz(logical_cpu);
     
 #elif defined(__linux__)
     // Try scaling_cur_freq first (most accurate for current frequency)

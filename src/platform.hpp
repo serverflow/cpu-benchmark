@@ -9,6 +9,11 @@
 #include <mutex>
 #include <atomic>
 #include <chrono>
+#include <sstream>
+#include <locale>
+#include <algorithm>
+#include <cmath>
+#include <condition_variable>
 
 // Cache information structure
 struct CacheInfo {
@@ -114,7 +119,7 @@ CpuFrequencyInfo get_cpu_frequency();
 // Sample CPU frequency during benchmark execution
 // Call this periodically during tests to track frequency changes
 // Returns current frequency in MHz, or 0 if not available
-double sample_current_frequency();
+double sample_current_frequency(int logical_cpu = -1);
 
 // Get number of CPU sockets in the system
 unsigned get_socket_count();
@@ -157,6 +162,10 @@ struct FrequencyStats {
     double avg_mhz;
     unsigned sample_count;
     bool available;
+    // Windows counters estimate effective frequency, not an instantaneous clock read.
+    bool estimated = false;
+    std::string source;
+    int logical_cpu = -1; // -1: aggregate; otherwise the pinned ST logical CPU
     
     FrequencyStats()
         : min_mhz(0.0)
@@ -166,11 +175,44 @@ struct FrequencyStats {
         , available(false) {}
 };
 
+inline FrequencyStats merge_frequency_stats(const FrequencyStats& a, const FrequencyStats& b) {
+    if (!a.available) return b;
+    if (!b.available) return a;
+    FrequencyStats result = a;
+    result.min_mhz = (std::min)(a.min_mhz, b.min_mhz);
+    result.max_mhz = (std::max)(a.max_mhz, b.max_mhz);
+    result.sample_count = a.sample_count + b.sample_count;
+    result.avg_mhz = (a.avg_mhz * a.sample_count + b.avg_mhz * b.sample_count) / result.sample_count;
+    result.estimated = a.estimated || b.estimated;
+    result.logical_cpu = -1;
+    if (a.source != b.source) result.source = "mixed";
+    return result;
+}
+
+// % Processor Performance is relative to nominal MHz, not to a changing P-state.
+inline double estimate_effective_frequency_mhz(double nominal_mhz, double performance_percent) {
+    if (!std::isfinite(nominal_mhz) || !std::isfinite(performance_percent)
+        || nominal_mhz <= 0.0 || performance_percent <= 0.0) return 0.0;
+    const double mhz = nominal_mhz * performance_percent / 100.0;
+    return std::isfinite(mhz) && mhz < 20000.0 ? mhz : 0.0;
+}
+
+inline std::string frequency_stats_json(const FrequencyStats& stats) {
+    std::ostringstream out;
+    out.imbue(std::locale::classic());
+    out << "{\"available\":" << (stats.available ? "true" : "false")
+        << ",\"min_mhz\":" << stats.min_mhz << ",\"max_mhz\":" << stats.max_mhz
+        << ",\"avg_mhz\":" << stats.avg_mhz << ",\"sample_count\":" << stats.sample_count
+        << ",\"estimated\":" << (stats.estimated ? "true" : "false")
+        << ",\"source\":\"" << stats.source << "\",\"logical_cpu\":" << stats.logical_cpu << "}";
+    return out.str();
+}
+
 // Class to sample CPU frequency during benchmark execution
 // Supports both manual sampling and background thread sampling
 class FrequencySampler {
 public:
-    FrequencySampler() : sum_mhz_(0.0), min_mhz_(1e9), max_mhz_(0.0), sample_count_(0),
+    explicit FrequencySampler(int logical_cpu = -1) : logical_cpu_(logical_cpu), sum_mhz_(0.0), min_mhz_(1e9), max_mhz_(0.0), sample_count_(0),
                          running_(false) {}
     
     ~FrequencySampler() {
@@ -179,7 +221,7 @@ public:
     
     // Take a frequency sample (call periodically during test)
     void sample() {
-        double freq = sample_current_frequency();
+        double freq = sample_current_frequency(logical_cpu_);
         if (freq > 0.0) {
             std::lock_guard<std::mutex> lock(mutex_);
             sum_mhz_ += freq;
@@ -192,11 +234,17 @@ public:
     // Start background sampling thread (samples every interval_ms milliseconds)
     void start_background(unsigned interval_ms = 100) {
         if (running_.load()) return;
+        // Prime rate counters before the timed workload. Do not record this sample.
+        sample_current_frequency(logical_cpu_);
         running_.store(true);
         sample_thread_ = std::thread([this, interval_ms]() {
+            std::unique_lock<std::mutex> lock(mutex_);
             while (running_.load()) {
+                if (wake_.wait_for(lock, std::chrono::milliseconds(interval_ms),
+                                   [this]() { return !running_.load(); })) break;
+                lock.unlock();
                 sample();
-                std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+                lock.lock();
             }
         });
     }
@@ -204,7 +252,13 @@ public:
     // Stop background sampling thread
     void stop_background() {
         if (running_.load()) {
-            running_.store(false);
+            {
+                // Share the wait mutex so a stop notification cannot be lost
+                // between the predicate check and entering the timed wait.
+                std::lock_guard<std::mutex> lock(mutex_);
+                running_.store(false);
+            }
+            wake_.notify_all();
             if (sample_thread_.joinable()) {
                 sample_thread_.join();
             }
@@ -221,6 +275,13 @@ public:
             stats.avg_mhz = sum_mhz_ / sample_count_;
             stats.sample_count = sample_count_;
             stats.available = true;
+#ifdef _WIN32
+            stats.estimated = true;
+            stats.source = "windows_pdh_processor_performance";
+            stats.logical_cpu = logical_cpu_;
+#else
+            stats.source = "platform_frequency";
+#endif
         }
         return stats;
     }
@@ -235,6 +296,7 @@ public:
     }
     
 private:
+    int logical_cpu_;
     double sum_mhz_;
     double min_mhz_;
     double max_mhz_;
@@ -243,6 +305,7 @@ private:
     std::atomic<bool> running_;
     std::thread sample_thread_;
     mutable std::mutex mutex_;
+    std::condition_variable wake_;
 };
 
 // Check if OpenMP is enabled
