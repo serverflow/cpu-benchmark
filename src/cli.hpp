@@ -404,7 +404,14 @@ inline ExtendedParseResult parse_args_extended(int argc, char* argv[]) {
     result.config.auto_size = true;  // Auto-size enabled by default
     result.config.explicit_size_set = false;
     result.config.enable_warmup = true;  // Warmup enabled by default
+#if defined(__ANDROID__)
+    // Android apps (incl. Termux) are normally allowed to lower their own nice
+    // value without root/CAP_SYS_NICE. Default this on so benchmark threads
+    // aren't starved by background OS/system services competing for the CPU.
+    result.config.high_priority = true;
+#else
     result.config.high_priority = false;  // High priority disabled by default
+#endif
     result.config.run_full_test = false;  // Full test mode disabled by default
     
     // Track modifications for submission eligibility

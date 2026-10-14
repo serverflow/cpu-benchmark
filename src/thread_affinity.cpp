@@ -44,6 +44,16 @@ static AffinityResult set_thread_affinity_handle(HANDLE handle, unsigned core_id
     }
     return AffinityResult::Failed;
 }
+#elif defined(__ANDROID__)
+    #ifndef _GNU_SOURCE
+        #define _GNU_SOURCE
+    #endif
+    #include <pthread.h>
+    #include <sched.h>
+    #include <sys/resource.h>
+    #include <sys/syscall.h>
+    #include <unistd.h>
+    #include <errno.h>
 #elif defined(__linux__)
     #ifndef _GNU_SOURCE
         #define _GNU_SOURCE
@@ -204,6 +214,190 @@ unsigned long long ThreadAffinityManager::get_current_affinity() {
     
     if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask)) {
         return static_cast<unsigned long long>(process_mask);
+    }
+    return 0;
+}
+
+// ============================================================================
+// Android (Bionic) Implementation
+// ============================================================================
+#elif defined(__ANDROID__)
+// Bionic libc does not provide pthread_setaffinity_np/pthread_getaffinity_np
+// (those are glibc extensions). We use the raw sched_setaffinity/getaffinity
+// syscalls instead, which operate on a Linux tid (not a pthread_t). To target
+// an arbitrary std::thread we resolve its tid via the bionic-specific
+// pthread_gettid_np(); for the calling thread we just use gettid().
+static pid_t android_tid_for_thread(pthread_t thread) {
+    if (pthread_equal(thread, pthread_self())) {
+        return gettid();
+    }
+    return pthread_gettid_np(thread);
+}
+
+AffinityResult ThreadAffinityManager::pin_to_core(std::thread& thread, unsigned core_id) {
+    if (core_id >= get_core_count()) {
+        return AffinityResult::InvalidCore;
+    }
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core_id, &cpuset);
+
+    pid_t tid = android_tid_for_thread(thread.native_handle());
+    int result = sched_setaffinity(tid, sizeof(cpu_set_t), &cpuset);
+
+    if (result != 0) {
+        if (errno == EPERM) {
+            return AffinityResult::PermissionDenied;
+        }
+        if (errno == EINVAL) {
+            return AffinityResult::InvalidCore;
+        }
+        return AffinityResult::Failed;
+    }
+
+    return AffinityResult::Success;
+}
+
+AffinityResult ThreadAffinityManager::pin_current_thread(unsigned core_id) {
+    if (core_id >= get_core_count()) {
+        return AffinityResult::InvalidCore;
+    }
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core_id, &cpuset);
+
+    int result = sched_setaffinity(gettid(), sizeof(cpu_set_t), &cpuset);
+
+    if (result != 0) {
+        if (errno == EPERM) {
+            return AffinityResult::PermissionDenied;
+        }
+        if (errno == EINVAL) {
+            return AffinityResult::InvalidCore;
+        }
+        return AffinityResult::Failed;
+    }
+
+    return AffinityResult::Success;
+}
+
+AffinityResult ThreadAffinityManager::pin_to_socket(unsigned socket_id) {
+    // Get cores for the specified socket
+    std::vector<unsigned> cores = get_cores_for_socket(socket_id);
+    if (cores.empty()) {
+        return AffinityResult::InvalidCore;
+    }
+
+    // Build CPU set from socket cores
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    for (unsigned core : cores) {
+        CPU_SET(core, &cpuset);
+    }
+
+    int result = sched_setaffinity(gettid(), sizeof(cpu_set_t), &cpuset);
+
+    if (result != 0) {
+        if (errno == EPERM) {
+            return AffinityResult::PermissionDenied;
+        }
+        if (errno == EINVAL) {
+            return AffinityResult::InvalidCore;
+        }
+        return AffinityResult::Failed;
+    }
+
+    return AffinityResult::Success;
+}
+
+AffinityResult ThreadAffinityManager::set_process_socket_affinity(unsigned socket_id) {
+    // Get cores for the specified socket
+    std::vector<unsigned> cores = get_cores_for_socket(socket_id);
+    if (cores.empty()) {
+        return AffinityResult::InvalidCore;
+    }
+
+    // Build CPU set from socket cores
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    for (unsigned core : cores) {
+        CPU_SET(core, &cpuset);
+    }
+
+    // Set affinity for the current process (affects all threads)
+    int result = sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+
+    if (result != 0) {
+        if (errno == EPERM) {
+            return AffinityResult::PermissionDenied;
+        }
+        if (errno == EINVAL) {
+            return AffinityResult::InvalidCore;
+        }
+        return AffinityResult::Failed;
+    }
+
+    return AffinityResult::Success;
+}
+
+PriorityResult ThreadAffinityManager::set_process_priority(ProcessPriority priority) {
+    int nice_value;
+
+    switch (priority) {
+        case ProcessPriority::Normal:
+            nice_value = 0;
+            break;
+        case ProcessPriority::AboveNormal:
+            nice_value = -5;
+            break;
+        case ProcessPriority::High:
+            nice_value = -10;
+            break;
+        case ProcessPriority::Realtime:
+            nice_value = -20;  // Lowest nice value (highest priority)
+            break;
+        default:
+            return PriorityResult::Failed;
+    }
+
+    // setpriority returns -1 on error, but -1 is also a valid nice value
+    // So we need to clear errno first and check it after
+    errno = 0;
+    int result = setpriority(PRIO_PROCESS, 0, nice_value);
+
+    if (result == -1 && errno != 0) {
+        if (errno == EPERM || errno == EACCES) {
+            return PriorityResult::PermissionDenied;
+        }
+        return PriorityResult::Failed;
+    }
+
+    return PriorityResult::Success;
+}
+
+bool ThreadAffinityManager::is_affinity_supported() {
+    return true;
+}
+
+bool ThreadAffinityManager::is_priority_supported() {
+    return true;
+}
+
+unsigned long long ThreadAffinityManager::get_current_affinity() {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+
+    if (sched_getaffinity(gettid(), sizeof(cpu_set_t), &cpuset) == 0) {
+        unsigned long long mask = 0;
+        unsigned core_count = get_core_count();
+        for (unsigned i = 0; i < core_count && i < 64; ++i) {
+            if (CPU_ISSET(i, &cpuset)) {
+                mask |= (1ULL << i);
+            }
+        }
+        return mask;
     }
     return 0;
 }
