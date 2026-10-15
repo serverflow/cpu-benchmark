@@ -316,10 +316,8 @@ inline void print_usage_extended(const char* program_name) {
     std::cout << "  - Warmup (2 seconds)\n";
     std::cout << "  - Compute test (--mode=compute)\n";
     std::cout << "  - Precision test (--precision=all)\n";
-    std::cout << "  - Memory bandwidth test (--mode=mem)\n";
-    std::cout << "  - Stencil test (--mode=stencil)\n";
-    std::cout << "  - Cache test (--mode=cache)\n";
-    std::cout << "  Results will be submitted to the server after completion.\n\n";
+    std::cout << "  Submission is offered after completion and requires confirmation.\n";
+    std::cout << "Other flags select a single-mode run instead of the full suite.\n\n";
     std::cout << "Options:\n";
     std::cout << "  --mode=MODE       Benchmark mode: mem, stencil, matmul3d, compute, cache\n";
     std::cout << "                    (default: mem)\n";
@@ -414,8 +412,8 @@ inline ExtendedParseResult parse_args_extended(int argc, char* argv[]) {
     result.config.precision_single_modified = false;
     result.config.mode_modified = false;
     
-    // Track if only "neutral" flags were specified (socket, quiet, no-color, etc.)
-    // These don't change the test mode, so we should still run full test
+    // Neutral flags (socket, quiet, no-color, auto-size) do not change
+    // what is measured, so they still run the full suite.
     bool only_neutral_flags = true;
     
     for (int i = 1; i < argc; ++i) {
@@ -443,6 +441,7 @@ inline ExtendedParseResult parse_args_extended(int argc, char* argv[]) {
         // Check for --force-scalar flag 
         if (arg == "--force-scalar") {
             result.config.force_scalar = true;
+            only_neutral_flags = false;
             continue;
         }
         
@@ -461,18 +460,21 @@ inline ExtendedParseResult parse_args_extended(int argc, char* argv[]) {
         // Check for --no-auto-size flag 
         if (arg == "--no-auto-size") {
             result.config.auto_size = false;
+            only_neutral_flags = false;
             continue;
         }
         
         // Check for --no-warmup flag 
         if (arg == "--no-warmup") {
             result.config.enable_warmup = false;
+            only_neutral_flags = false;
             continue;
         }
         
         // Check for --high-priority flag 
         if (arg == "--high-priority") {
             result.config.high_priority = true;
+            only_neutral_flags = false;
             continue;
         }
         
@@ -537,6 +539,7 @@ inline ExtendedParseResult parse_args_extended(int argc, char* argv[]) {
             // --output 
             else if (extract_arg_value(argv[i], "--output", value)) {
                 result.config.base.output = string_to_output(value);
+                only_neutral_flags = false;
             }
             else {
                 result.success = false;
@@ -550,7 +553,7 @@ inline ExtendedParseResult parse_args_extended(int argc, char* argv[]) {
         }
     }
     
-    // If only neutral flags were specified (like --socket, --quiet, --no-color),
+    // If only neutral flags were specified (socket, quiet, no-color, auto-size),
     // enable full test mode as if no arguments were given
     if (only_neutral_flags && argc > 1) {
         result.config.run_full_test = true;
